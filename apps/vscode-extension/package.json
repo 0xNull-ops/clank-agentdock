@@ -6,10 +6,16 @@
   "private": true,
   "publisher": "freebuff",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/0xNull-ops/agentdock.git"
+  },
   "engines": {
     "vscode": "^1.92.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "onView:agentdock.agentView",
     "onCommand:agentdock.open",
@@ -21,9 +27,9 @@
   "main": "./dist/extension.js",
   "dependencies": {
     "@freebuff/agent-core": "file:../../packages/agent-core",
+    "@freebuff/agent-storage": "file:../../packages/storage",
     "@freebuff/checkpoints": "file:../../packages/checkpoints",
     "@freebuff/provider-openai-compatible": "file:../../packages/providers/openai-compatible",
-    "@freebuff/agent-storage": "file:../../packages/storage",
     "@freebuff/workspace-tools": "file:../../packages/workspace-tools",
     "sql.js": "^1.12.0"
   },
@@ -74,7 +80,16 @@
         "agentdock.defaultMode": {
           "type": "string",
           "default": "ask",
-          "enum": ["ask", "plan", "architect", "implement", "debug", "review", "orchestrate", "custom"],
+          "enum": [
+            "ask",
+            "plan",
+            "architect",
+            "implement",
+            "debug",
+            "review",
+            "orchestrate",
+            "custom"
+          ],
           "description": "Mode used when a new Agent Harness session starts."
         },
         "agentdock.defaultModel": {
@@ -117,16 +132,26 @@
           "default": false,
           "description": "Replay provider reasoning metadata on assistant messages, as required by MiniMax and some compatible endpoints."
         },
+        "agentdock.provider.requiresAssistantFrameReplay": {
+          "type": "boolean",
+          "default": false,
+          "description": "Replay safe opaque assistant fields from matching provider frames when an endpoint requires exact continuation."
+        },
         "agentdock.provider.sendMaxTokensAs": {
           "type": "string",
           "default": "max_tokens",
-          "enum": ["max_tokens", "max_completion_tokens"],
+          "enum": [
+            "max_tokens",
+            "max_completion_tokens"
+          ],
           "description": "Wire field used for the output-token limit."
         },
         "agentdock.provider.headers": {
           "type": "object",
           "default": {},
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "description": "Non-secret custom HTTP headers. Authorization, Cookie, and API-key headers are rejected; use SecretStorage for the API key."
         }
       }
@@ -135,13 +160,15 @@
   "scripts": {
     "tokens": "node ../../scripts/build-design-tokens.mjs",
     "build:packages": "tsc -p ../../packages/agent-core/tsconfig.json && tsc -p ../../packages/checkpoints/tsconfig.json && tsc -p ../../packages/providers/openai-compatible/tsconfig.json && tsc -p ../../packages/workspace-tools/tsconfig.json && tsc -p ../../packages/storage/tsconfig.json",
-    "compile": "npm run tokens && npm run build:packages && tsc -p ./tsconfig.json && tsc -p ./tsconfig.webview.json && cp src/webview/styles.css src/webview/generated-tokens.css dist/webview/",
+    "compile": "npm run tokens && npm run build:packages && node ../../scripts/bundle-vscode-extension.mjs && tsc -p ./tsconfig.webview.json && cp src/webview/styles.css src/webview/generated-tokens.css dist/webview/",
     "test": "bun test test",
+    "smoke:bundle": "node ../../scripts/smoke-vscode-bundle.mjs",
     "watch": "tsc -p ./tsconfig.json --watch",
     "typecheck": "npm run build:packages && tsc -p ./tsconfig.json --noEmit && tsc -p ./tsconfig.webview.json --noEmit"
   },
   "devDependencies": {
     "@types/vscode": "^1.92.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.5.4"
   }
 }

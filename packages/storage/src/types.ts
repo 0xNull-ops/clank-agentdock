@@ -15,6 +15,8 @@ export interface SessionStoreOptions {
   filePath: string;
   /** Injected initializer is useful for browser/WASM hosts and deterministic tests. */
   sqlJs?: SqlJsInitializer;
+  /** Override sql.js asset resolution for bundled hosts such as a VSIX. */
+  locateFile?: (file: string) => string;
   now?: () => number;
 }
 

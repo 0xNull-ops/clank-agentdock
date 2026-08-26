@@ -21,6 +21,8 @@ export type UiToExtensionMessage =
   | { type: "sendMessage"; text: string; mode: AgentMode; modelId: string; context: ContextRef[] }
   | { type: "cancelRun" }
   | { type: "newSession" }
+  | { type: "listSessions" }
+  | { type: "openSession"; sessionId: string }
   | { type: "changeMode"; mode: AgentMode }
   | { type: "changeModel"; modelId: string }
   | { type: "approveTool"; approvalId: string }
@@ -44,8 +46,21 @@ export interface ModelOption {
   hint: string;
 }
 
+/** UI-safe metadata for a recent workspace session. */
+export interface SessionHistoryItem {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  activeMode: AgentMode;
+  modelId: string;
+  status: "idle" | "running" | "waiting_for_approval" | "cancelled" | "error";
+}
+
 export type ExtensionToUiMessage =
-  | { type: "initialize"; sessionId: string; mode: AgentMode; modelId: string; models: ModelOption[]; messages: ChatMessage[]; workspaceName?: string }
+  | { type: "initialize"; sessionId: string; mode: AgentMode; modelId: string; models: ModelOption[]; messages: ChatMessage[]; tools: ToolActivity[]; workspaceName?: string }
+  | { type: "sessionList"; sessions: SessionHistoryItem[]; activeSessionId: string }
+  | { type: "sessionOpened"; session: SessionHistoryItem; messages: ChatMessage[]; tools: ToolActivity[] }
   | { type: "modeChanged"; mode: AgentMode }
   | { type: "modelChanged"; modelId: string }
   | { type: "modelsChanged"; models: ModelOption[] }

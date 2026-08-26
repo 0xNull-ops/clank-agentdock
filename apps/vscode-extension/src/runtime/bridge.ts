@@ -178,14 +178,30 @@ export class AgentRuntimeBridge {
       return;
     }
 
-    const configuration = await readProviderConfiguration(this.host.context, input.modelId);
+    // Register the controller before any asynchronous setup. Session
+    // switching can therefore cancel a run immediately after send is queued,
+    // even while provider configuration is still being loaded.
+    const controller = new AbortController();
+    this.runs.set(input.sessionId, controller);
+    let configuration: ProviderConfiguration | { ok: false; message: string };
+    try {
+      configuration = await readProviderConfiguration(this.host.context, input.modelId);
+    } catch (error) {
+      this.runs.delete(input.sessionId);
+      this.host.post({ type: "error", kind: "provider", message: actionableError(error) });
+      return;
+    }
     if (!configuration.ok) {
+      this.runs.delete(input.sessionId);
       this.host.post({ type: "error", kind: "provider", message: configuration.message });
       return;
     }
 
-    const controller = new AbortController();
-    this.runs.set(input.sessionId, controller);
+    if (controller.signal.aborted) {
+      this.runs.delete(input.sessionId);
+      this.host.post({ type: "runState", state: "cancelled", runId: input.sessionId });
+      return;
+    }
     const session: AgentSession = {
       id: input.sessionId,
       workspaceId: workspaceId(),
@@ -295,6 +311,11 @@ export class AgentRuntimeBridge {
 
   private onEvent(event: AgentEvent): void {
     this.persistence.eventSink(event);
+    // A session switch aborts the old controller before restoring the new
+    // transcript. Providers may still deliver a buffered frame; never let it
+    // repopulate the newly selected session's UI.
+    const eventSessionId = eventSessionIdForBridgeEvent(event);
+    if (eventSessionId && this.runs.get(eventSessionId)?.signal.aborted) return;
     switch (event.type) {
       case "text_delta":
         this.host.post({ type: "textDelta", runId: event.sessionId, text: event.text });
@@ -382,6 +403,7 @@ async function readProviderConfiguration(context: vscode.ExtensionContext, selec
       supportsDeveloperRole: settings.get<boolean>("provider.supportsDeveloperRole", true),
       supportsParallelToolCalls: settings.get<boolean>("provider.supportsParallelToolCalls", true),
       requiresAssistantReasoningReplay: settings.get<boolean>("provider.requiresAssistantReasoningReplay", false),
+      requiresAssistantFrameReplay: settings.get<boolean>("provider.requiresAssistantFrameReplay", false),
       sendMaxTokensAs: settings.get<"max_tokens" | "max_completion_tokens">("provider.sendMaxTokensAs", "max_tokens"),
     },
   };
@@ -441,8 +463,25 @@ function toolActivity(name: string, id: string, state: ToolActivity["state"], de
   return { id, name, summary: state === "running" ? "Working in the workspace" : "Finished", state, detail };
 }
 
+function eventSessionIdForBridgeEvent(event: AgentEvent): string | undefined {
+  switch (event.type) {
+    case "session_started":
+      return event.session.id;
+    case "mode_changed":
+      return undefined;
+    case "tool_call_started":
+    case "tool_started":
+    case "tool_completed":
+      return event.call.sessionId;
+    case "tool_approval_required":
+      return event.approval.call.sessionId;
+    default:
+      return event.sessionId;
+  }
+}
+
 function workspaceId(): string {
-  return vscode.workspace.workspaceFile?.toString() ?? vscode.workspace.workspaceFolders?.[0]?.uri.toString() ?? "no-workspace";
+  return vscode.workspace.workspaceFile?.toString(true) ?? vscode.workspace.workspaceFolders?.[0]?.uri.toString(true) ?? "no-workspace";
 }
 
 async function loadWorkspaceInstructions(): Promise<InstructionSource[]> {

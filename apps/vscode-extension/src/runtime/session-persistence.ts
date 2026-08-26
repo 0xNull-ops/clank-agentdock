@@ -34,6 +34,8 @@ export interface SessionPersistenceOptions {
   workspaceId?: string;
   /** Inject sql.js in tests or hosts that need an explicit WASM locator. */
   sqlJs?: SqlJsInitializer;
+  /** Override bundled sql.js asset lookup. Defaults to the extension dist directory. */
+  locateFile?: (file: string) => string;
   /** Clock injection keeps session creation and event tests deterministic. */
   now?: () => number;
 }
@@ -59,6 +61,7 @@ export interface RestoredSession {
 
 export interface SessionPersistenceHost {
   globalStorageUri: vscode.Uri;
+  extensionUri: vscode.Uri;
 }
 
 /**
@@ -329,6 +332,8 @@ export class SessionPersistenceCoordinator {
     const storeOptions: SessionStoreOptions = {
       filePath,
       ...(this.options.sqlJs ? { sqlJs: this.options.sqlJs } : {}),
+      locateFile: this.options.locateFile
+        ?? ((file) => vscode.Uri.joinPath(this.host.extensionUri, "dist", file).fsPath),
       ...(this.options.now ? { now: this.options.now } : {}),
     };
     return SessionStore.open(storeOptions);
@@ -368,8 +373,7 @@ export class SessionPersistenceCoordinator {
       case "tool_call_started":
         await store.recordToolCall(event.call);
         return;
-      case "tool_approval_required":
-        {
+      case "tool_approval_required": {
         const session = this.sessions.get(event.approval.call.sessionId);
         const target = event.approval.request.path
           ? normalizePath(event.approval.request.path)
@@ -389,7 +393,7 @@ export class SessionPersistenceCoordinator {
         });
         await this.updateSessionStatus(event.approval.call.sessionId, "waiting_for_approval");
         return;
-        }
+      }
       case "tool_started":
         await store.recordToolCall(event.call);
         return;

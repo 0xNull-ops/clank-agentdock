@@ -32,12 +32,16 @@ Key` from the Command Palette to store one in VS Code SecretStorage. Use
 `Agent Harness: Validate Provider` to check reachability, or
 `Agent Harness: Clear API Key` to remove it.
 
-The first vertical slice registers read-only workspace tools (`read_file`,
-`list_directory`, `glob`, and `get_diagnostics`) and runs them through the
-provider-independent permission engine. Ask/Plan/Review modes stay read-only;
-write tools will only be advertised once their VS Code adapters and approval
-flows are implemented. An untrusted VS Code workspace continues to support
-read-only chat and blocks mutation-capable tools.
+The runtime registers guarded file/search tools, dedicated Git reads, VS Code
+diagnostics, atomic writes/edits/patches, and bounded classified commands.
+Ask/Plan/Review stay read-only; Implement exposes mutations through the
+provider-independent permission and approval flow. An untrusted workspace can
+still use read-only chat while mutation tools remain unavailable.
+
+Sessions, provider replay frames, steps, usage, approvals, and tool results are
+stored in SQLite below VS Code global storage. The header history control can
+switch among recent workspace sessions without sending opaque replay state to
+the webview.
 
 Every runtime turn is bracketed by `CheckpointCoordinator.beginTurn` and
 `completeTurn` (also available as `runWithCheckpoint` for future mutating tool
@@ -54,4 +58,6 @@ adapts those commands to `runAgent` and `OpenAICompatibleProvider`, forwarding
 streamed text, tool activity, approvals, usage, cancellation, and normalized
 provider errors as `ExtensionToUiMessage` events. Keeping this seam explicit
 means a future CLI or alternate UI can reuse the same session protocol without
-depending on Webview APIs.
+depending on Webview APIs. The extension host is bundled into a self-contained
+`dist/extension.js`; only the VS Code API remains external, and the sql.js WASM
+is copied alongside it.

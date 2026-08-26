@@ -7,7 +7,8 @@ import type {
   ToolApproval,
   CheckpointSummaryCard,
   UiToExtensionMessage,
-  ModelOption
+  ModelOption,
+  SessionHistoryItem
 } from "../shared/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(message: UiToExtensionMessage): void };
@@ -30,6 +31,10 @@ const modes: Array<{ id: AgentMode; label: string; description: string }> = [
 let models: ModelOption[] = [
   { id: "openai-compatible", label: "Configure model…", hint: "OpenAI-compatible endpoint" }
 ];
+let sessions: SessionHistoryItem[] = [];
+let activeSessionId = "";
+let historyOpen = false;
+let historyBusy = false;
 
 let activeMode: AgentMode = "ask";
 let activeModel = "openai-compatible";
@@ -46,10 +51,30 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
   const message = event.data;
   switch (message.type) {
     case "initialize":
+      activeSessionId = message.sessionId;
       activeMode = message.mode;
       activeModel = message.modelId;
       models = message.models;
       messages = message.messages;
+      tools = message.tools;
+      break;
+    case "sessionList":
+      sessions = message.sessions;
+      activeSessionId = message.activeSessionId;
+      historyBusy = false;
+      break;
+    case "sessionOpened":
+      activeSessionId = message.session.id;
+      activeMode = message.session.activeMode;
+      activeModel = message.session.modelId;
+      messages = message.messages;
+      tools = message.tools;
+      checkpoints = [];
+      checkpointConflict = undefined;
+      approval = undefined;
+      historyBusy = false;
+      historyOpen = false;
+      runState = "idle";
       break;
     case "modeChanged":
       activeMode = message.mode;
@@ -88,6 +113,7 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       messages = [...messages, { id: `checkpoint-conflict-${Date.now()}`, role: "system", text: `${message.message} Affected paths: ${message.paths.slice(0, 5).join(", ")}${message.paths.length > 5 ? "…" : ""}`, createdAt: Date.now() }];
       break;
     case "error":
+      historyBusy = false;
       messages = [...messages, { id: `error-${Date.now()}`, role: "system", text: message.message, createdAt: Date.now() }];
       runState = "error";
       break;
@@ -108,8 +134,9 @@ function render(): void {
     <section class="shell">
       <header class="header">
         <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><div><p class="eyebrow">FORGE / LOCAL HARNESS</p><h1>Agent chat</h1></div></div>
-        <button class="icon-button" data-action="settings" aria-label="Open Agent Harness settings">⋯</button>
+        <div class="header-actions"><button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}"><span class="session-picker-icon">◷</span><span class="session-picker-label">${escapeHtml(activeSessionTitle())}</span><span class="session-picker-chevron">⌄</span></button><button class="icon-button" data-action="settings" aria-label="Open Agent Harness settings">⋯</button></div>
       </header>
+      ${historyOpen ? sessionMenu() : ""}
       <div class="control-strip">
         <label class="select-wrap mode-select"><span class="mode-dot mode-${mode.id}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${item.id}" ${item.id === activeMode ? "selected" : ""}>${item.label}</option>`).join("")}</select><span class="chevron">⌄</span></label>
         <label class="select-wrap model-select"><span class="model-glyph">◈</span><span class="sr-only">Model</span><select id="model-select">${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">⌄</span></label>
@@ -190,6 +217,18 @@ function wireInteractions(): void {
     if (input) { input.value = button.dataset.prompt ?? ""; input.focus(); }
   }));
   document.querySelector<HTMLButtonElement>("[data-action=settings]")?.addEventListener("click", () => vscode.postMessage({ type: "openSettings" }));
+  document.querySelector<HTMLButtonElement>("[data-action=history]")?.addEventListener("click", () => { historyOpen = !historyOpen; render(); });
+  document.querySelector<HTMLButtonElement>("[data-action=refresh-sessions]")?.addEventListener("click", () => {
+    vscode.postMessage({ type: "listSessions" });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-session-id]").forEach((button) => button.addEventListener("click", () => {
+    const sessionId = button.dataset.sessionId;
+    if (!sessionId || historyBusy) return;
+    historyBusy = true;
+    historyOpen = false;
+    render();
+    vscode.postMessage({ type: "openSession", sessionId });
+  }));
   document.querySelector<HTMLButtonElement>("[data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
   document.querySelector<HTMLButtonElement>("[data-action=approve]")?.addEventListener("click", () => { if (approval) vscode.postMessage({ type: "approveTool", approvalId: approval.id }); });
   document.querySelector<HTMLButtonElement>("[data-action=deny]")?.addEventListener("click", () => { if (approval) vscode.postMessage({ type: "denyTool", approvalId: approval.id }); });
@@ -220,7 +259,23 @@ function wireInteractions(): void {
     vscode.postMessage({ type: "addContext", ref });
     render();
   });
-  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; runState = "idle"; vscode.postMessage({ type: "newSession" }); render(); });
+  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; runState = "idle"; historyOpen = false; vscode.postMessage({ type: "newSession" }); render(); });
+}
+
+function sessionMenu(): string {
+  const items = sessions.length
+    ? sessions.map((session) => `<button class="session-item ${session.id === activeSessionId ? "active" : ""}" data-session-id="${escapeHtml(session.id)}" role="menuitem" ${historyBusy ? "disabled" : ""}><span class="session-item-main"><b>${escapeHtml(session.title || "Untitled session")}</b><small>${escapeHtml(session.activeMode)} · ${formatSessionDate(session.updatedAt)}</small></span><span class="session-item-status ${session.status}">${session.id === activeSessionId ? "open" : session.status === "waiting_for_approval" ? "waiting" : ""}</span></button>`).join("")
+    : `<p class="session-empty">No recent sessions in this workspace.</p>`;
+  return `<div class="session-menu" role="menu" aria-label="Recent workspace sessions"><div class="session-menu-heading"><span>RECENT SESSIONS</span><button data-action="refresh-sessions" aria-label="Refresh recent sessions">↻</button></div>${items}</div>`;
+}
+
+function activeSessionTitle(): string {
+  return sessions.find((session) => session.id === activeSessionId)?.title || "Current session";
+}
+
+function formatSessionDate(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  return new Date(value).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 function appendStreamingText(text: string): void {

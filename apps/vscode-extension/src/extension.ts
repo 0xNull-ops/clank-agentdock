@@ -6,14 +6,17 @@ import {
   type UiToExtensionMessage,
   type ContextRef,
   type ChatMessage,
+  type ToolActivity,
   MODEL_OPTIONS
 } from "./shared/protocol";
 import { AgentRuntimeBridge } from "./runtime/bridge";
 import { SessionPersistenceCoordinator, type RestoredSession } from "./runtime/session-persistence";
 import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
+import { chatMessagesFromNormalized, sessionHistoryItemFromSession, toolActivitiesFromSnapshot } from "./shared/session-history";
 
 const VIEW_ID = "agentdock.agentView";
 const API_KEY_SECRET = "agentdock.provider.apiKey";
+const SESSION_LIST_LIMIT = 24;
 
 let sessionPersistence: SessionPersistenceCoordinator | undefined;
 
@@ -22,7 +25,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const recent = (await sessionPersistence.list({ limit: 1 }))[0];
   const restored = recent ? await sessionPersistence.restore(recent.id) : undefined;
   const replayMessages = recent ? await sessionPersistence.replayMessages(recent.id) : undefined;
-  const provider = new AgentViewProvider(context, sessionPersistence, restored, replayMessages);
+  const snapshot = recent ? await sessionPersistence.openSnapshot(recent.id) : undefined;
+  const provider = new AgentViewProvider(context, sessionPersistence, restored, replayMessages, snapshot ? toolActivitiesFromSnapshot(snapshot) : []);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true }
@@ -83,20 +87,23 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   private modelId: string;
   private readonly runtime: AgentRuntimeBridge;
   private restoredMessages: ChatMessage[];
-  private newSessionPending?: Promise<void>;
+  private restoredTools: ToolActivity[];
+  private sessionOperations: Promise<void> = Promise.resolve();
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly persistence: SessionPersistenceCoordinator,
     restored?: RestoredSession,
     replayMessages?: NormalizedMessage[],
+    restoredTools: ToolActivity[] = [],
   ) {
     const config = vscode.workspace.getConfiguration("agentdock");
     this.mode = restored ? normalizeMode(restored.session.activeMode) : normalizeMode(config.get<string>("defaultMode", "ask"));
     this.modelId = restored?.session.modelId
       ?? (config.get<string>("provider.model", "").trim() || config.get<string>("defaultModel", MODEL_OPTIONS[0].id));
     this.sessionId = restored?.session.id ?? `session-${Date.now().toString(36)}`;
-    this.restoredMessages = restored?.messages.flatMap(toChatMessage) ?? [];
+    this.restoredMessages = restored ? chatMessagesFromNormalized(restored.messages) : [];
+    this.restoredTools = restoredTools;
     this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence);
     if (restored) this.runtime.restoreHistory(restored.session.id, replayMessages ?? restored.messages);
   }
@@ -134,31 +141,45 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           modelId: this.modelId,
           models: this.runtime.cachedModelOptions(this.modelId),
           messages: this.restoredMessages,
+          tools: this.restoredTools,
           workspaceName: vscode.workspace.name
         });
+        await this.postSessionList();
         void this.runtime.restoreRecentCheckpointCards();
         void this.runtime.refreshModels(false);
         return;
       case "changeMode":
-        this.mode = message.mode;
-        this.post({ type: "modeChanged", mode: this.mode });
-        void this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode });
+        await this.enqueueSessionOperation(async () => {
+          this.mode = message.mode;
+          this.post({ type: "modeChanged", mode: this.mode });
+          await this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode });
+        });
         return;
       case "changeModel":
-        this.modelId = message.modelId;
-        this.post({ type: "modelChanged", modelId: this.modelId });
-        void this.persistence.updateSessionSelection(this.sessionId, { modelId: this.modelId });
+        await this.enqueueSessionOperation(async () => {
+          this.modelId = message.modelId;
+          this.post({ type: "modelChanged", modelId: this.modelId });
+          await this.persistence.updateSessionSelection(this.sessionId, { modelId: this.modelId });
+        });
         return;
       case "sendMessage":
-        await this.newSessionPending;
-        void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context: message.context });
+        await this.enqueueSessionOperation(async () => {
+          void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context: message.context })
+            .finally(() => this.postSessionList())
+            .catch((error) => this.post({ type: "error", kind: "unknown", message: error instanceof Error ? error.message : String(error) }));
+        });
         return;
       case "cancelRun":
         this.runtime.cancel(this.sessionId);
         return;
       case "newSession":
-        this.newSessionPending ??= this.startNewSession().finally(() => { this.newSessionPending = undefined; });
-        await this.newSessionPending;
+        await this.enqueueSessionOperation(() => this.startNewSession());
+        return;
+      case "listSessions":
+        await this.enqueueSessionOperation(() => this.postSessionList());
+        return;
+      case "openSession":
+        await this.enqueueSessionOperation(() => this.openSession(message.sessionId));
         return;
       case "approveTool":
         void this.runtime.approve(message.approvalId, "allow");
@@ -188,6 +209,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     const session = await this.persistence.newSession({ activeMode: this.mode, modelId: this.modelId });
     this.sessionId = session.id;
     this.restoredMessages = [];
+    this.restoredTools = [];
     this.post({
       type: "initialize",
       sessionId: this.sessionId,
@@ -195,8 +217,66 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       modelId: this.modelId,
       models: this.runtime.cachedModelOptions(this.modelId),
       messages: [],
+      tools: [],
       workspaceName: vscode.workspace.name,
     });
+    await this.postSessionList();
+  }
+
+  /** Queue stateful session work so an open cannot race a send or new session. */
+  private enqueueSessionOperation(operation: () => Promise<void>): Promise<void> {
+    const next = this.sessionOperations.then(operation, operation);
+    this.sessionOperations = next.catch(() => undefined);
+    return next;
+  }
+
+  private async postSessionList(): Promise<void> {
+    const sessions = await this.persistence.list({ limit: SESSION_LIST_LIMIT });
+    this.post({
+      type: "sessionList",
+      sessions: sessions.map(sessionHistoryItemFromSession),
+      activeSessionId: this.sessionId,
+    });
+  }
+
+  private async openSession(sessionId: string): Promise<void> {
+    const previousSessionId = this.sessionId;
+    if (sessionId === this.sessionId) {
+      await this.postSessionList();
+      return;
+    }
+    this.runtime.cancel(previousSessionId);
+    // The list is both the workspace scope check and the source of the item
+    // shown in the menu. Do not open an arbitrary id supplied by the webview.
+    const listed = (await this.persistence.list({ limit: SESSION_LIST_LIMIT })).find((session) => session.id === sessionId);
+    if (!listed) {
+      this.post({ type: "error", kind: "workspace", message: "That session is not available in this workspace." });
+      return;
+    }
+    const restored = await this.persistence.restore(sessionId);
+    if (!restored) {
+      this.post({ type: "error", kind: "workspace", message: "The selected session could not be restored." });
+      return;
+    }
+    // replayMessages intentionally remains host-only: the bridge needs the
+    // provider frames, while the webview receives only chatMessages below.
+    const replayMessages = await this.persistence.replayMessages(sessionId);
+    const snapshot = await this.persistence.openSnapshot(sessionId);
+    this.runtime.reset(previousSessionId);
+    this.sessionId = restored.session.id;
+    this.mode = normalizeMode(restored.session.activeMode);
+    this.modelId = restored.session.modelId;
+    this.restoredMessages = chatMessagesFromNormalized(restored.messages);
+    this.restoredTools = snapshot ? toolActivitiesFromSnapshot(snapshot) : [];
+    this.runtime.restoreHistory(this.sessionId, replayMessages);
+    this.post({
+      type: "sessionOpened",
+      session: sessionHistoryItemFromSession(restored.session),
+      messages: this.restoredMessages,
+      tools: this.restoredTools,
+    });
+    this.post({ type: "runState", state: "idle" });
+    await this.postSessionList();
   }
 
   private post(message: ExtensionToUiMessage): void {
@@ -246,8 +326,11 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
     case "ready":
     case "cancelRun":
     case "newSession":
+    case "listSessions":
     case "openSettings":
       return true;
+    case "openSession":
+      return typeof message.sessionId === "string" && message.sessionId.length > 0 && message.sessionId.length <= 256;
     case "changeMode":
       return typeof message.mode === "string" && normalizeMode(message.mode) === message.mode;
     case "changeModel":
@@ -292,10 +375,4 @@ function isContextRef(value: unknown): value is ContextRef {
     && ref.label.length <= 512
     && ["file", "selection", "folder", "diagnostics"].includes(String(ref.kind))
     && (ref.uri === undefined || (typeof ref.uri === "string" && ref.uri.length <= 4_096));
-}
-
-function toChatMessage(message: NormalizedMessage, index: number): ChatMessage[] {
-  if (message.role !== "user" && message.role !== "assistant") return [];
-  if (typeof message.content !== "string" || !message.content) return [];
-  return [{ id: `restored-${index}`, role: message.role, text: message.content, createdAt: 0 }];
 }

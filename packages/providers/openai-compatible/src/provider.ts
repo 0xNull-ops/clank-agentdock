@@ -18,6 +18,8 @@ export interface OpenAICompatibility {
   supportsDeveloperRole?: boolean;
   reasoningField?: string;
   requiresAssistantReasoningReplay?: boolean;
+  /** Replay opaque assistant fields retained in ProviderFrame payloads. */
+  requiresAssistantFrameReplay?: boolean;
   supportsParallelToolCalls?: boolean;
   streamUsage?: boolean;
 }
@@ -169,7 +171,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
   private toWireRequest(request: NormalizedChatRequest): Record<string, unknown> {
     const compatibility = this.config.compatibility ?? {};
-    const messages = request.messages.map((message) => this.toWireMessage(message, compatibility));
+    const messages = request.messages.map((message) => this.toWireMessage(message, compatibility, request.model));
     const body: Record<string, unknown> = { model: request.model, messages, stream: true };
     if (request.tools?.length) body.tools = request.tools.map(toWireTool);
     if (request.toolChoice) body.tool_choice = request.toolChoice;
@@ -182,15 +184,39 @@ export class OpenAICompatibleProvider implements LLMProvider {
     return body;
   }
 
-  private toWireMessage(message: NormalizedMessage, compatibility: OpenAICompatibility): Record<string, unknown> {
+  private toWireMessage(message: NormalizedMessage, compatibility: OpenAICompatibility, model: string): Record<string, unknown> {
     let role = message.role;
     if (role === "developer" && compatibility.supportsDeveloperRole === false) role = "system";
     const wire: Record<string, unknown> = { role, content: message.content };
     if (message.name) wire.name = message.name;
     if (message.toolCallId) wire.tool_call_id = message.toolCallId;
     if (message.toolCalls) wire.tool_calls = message.toolCalls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }));
-    // Keep exact provider metadata available for MiniMax-style reasoning replay.
-    if (message.providerMetadata && compatibility.requiresAssistantReasoningReplay) Object.assign(wire, message.providerMetadata);
+    const replayReasoning = compatibility.requiresAssistantReasoningReplay === true;
+    const replayFrames = compatibility.requiresAssistantFrameReplay === true;
+    // Keep exact provider metadata available for MiniMax-style reasoning replay,
+    // but never allow provider data to replace normalized transcript fields.
+    const metadataKeys = new Set<string>();
+    if (message.providerMetadata && replayReasoning) {
+      for (const [key, value] of Object.entries(message.providerMetadata)) {
+        if (REPLAY_RESERVED_FIELDS.has(key)) continue;
+        wire[key] = value;
+        metadataKeys.add(key);
+      }
+    }
+    // A response can produce many opaque frames, but the normalized contract
+    // deliberately stores one assistant message. Merge their provider-only
+    // fields into that message instead of appending synthetic assistant turns.
+    if (replayFrames && message.role === "assistant" && message.providerFrames?.length) {
+      for (const frame of [...message.providerFrames]
+        .filter((item) => item.providerId === this.id && item.modelId === model)
+        .sort((left, right) => left.sequence - right.sequence)) {
+        const fields = assistantFields(frame.payload);
+        for (const [key, value] of Object.entries(fields)) {
+          if (REPLAY_RESERVED_FIELDS.has(key) || metadataKeys.has(key)) continue;
+          wire[key] = key in wire ? mergeReplayField(wire[key], value) : value;
+        }
+      }
+    }
     return wire;
   }
 
@@ -209,6 +235,55 @@ function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.filter((part) => part?.type === "text").map((part) => part.text ?? "").join("");
   return "";
+}
+
+// These fields describe the normalized message or the streaming envelope,
+// rather than provider-only assistant state. Replaying them would either
+// overwrite canonical text/tool calls or send a response object as a request.
+const REPLAY_RESERVED_FIELDS = new Set([
+  "role", "content", "tool_calls", "function_call", "name", "tool_call_id",
+  "index", "finish_reason", "finish_details", "id", "object", "created",
+  "model", "usage", "choices", "delta", "message", "error",
+  "system_fingerprint", "service_tier",
+]);
+
+function assistantFields(payload: unknown): Record<string, unknown> {
+  const root = asRecord(payload);
+  if (!root) return {};
+  const choices = Array.isArray(root.choices) ? root.choices : undefined;
+  const choice = choices?.length ? asRecord(choices[0]) : undefined;
+  const message = choice && asRecord(choice.message);
+  if (message) return message;
+  const delta = choice && asRecord(choice.delta);
+  if (delta) return delta;
+  const assistant = asRecord(root.assistant);
+  if (assistant) return assistant;
+  return root;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function mergeReplayField(existing: unknown, incoming: unknown): unknown {
+  if (typeof existing === "string" && typeof incoming === "string") {
+    if (existing === incoming || existing.endsWith(incoming)) return existing;
+    if (incoming.endsWith(existing)) return incoming;
+    return `${existing}${incoming}`;
+  }
+  if (Array.isArray(existing) && Array.isArray(incoming)) {
+    return [...existing, ...incoming].filter((value, index, values) =>
+      values.findIndex((candidate) => sameReplayValue(candidate, value)) === index,
+    );
+  }
+  if (asRecord(existing) && asRecord(incoming)) return { ...asRecord(existing), ...asRecord(incoming) };
+  return incoming;
+}
+
+function sameReplayValue(left: unknown, right: unknown): boolean {
+  try { return JSON.stringify(left) === JSON.stringify(right); } catch { return left === right; }
 }
 
 function normalizeHttpError(raw: any, status?: number): NormalizedProviderError {

@@ -35,19 +35,13 @@ history.
 
 ## VSIX/sql.js packaging contract
 
-The extension package must add `@freebuff/agent-storage` as a runtime
-dependency and build it after `@freebuff/agent-core` has produced its
-declarations. `sql.js` is a transitive runtime dependency, but its WASM file
-must be present in the installed extension. The extension packaging step must
-therefore either:
+The extension host is bundled with esbuild so local `file:` workspace packages
+do not remain as broken monorepo symlinks in an installed VSIX. `vscode` is the
+only external module. The build copies `sql-wasm.wasm` to `dist`, and
+`SessionPersistenceCoordinator` supplies an absolute `extensionUri/dist`
+`locateFile` path to the storage package.
 
-1. preserve `node_modules/sql.js/dist/sql-wasm.wasm` (and the matching
-   `sql-wasm.js`) in the VSIX and let the storage package's `locateFile` resolve
-   it; or
-2. inject `SessionPersistenceOptions.sqlJs` with an initializer whose
-   `locateFile` returns an absolute path to a copied `sql-wasm.wasm` asset.
-
-Do not replace the WASM database with a JSON fallback. Keep `sql.js` and the
-WASM asset in the extension's runtime dependency/package allow-list, and run a
-fresh `npm install` after adding the local storage dependency so the lockfile
-and VSIX dependency tree agree.
+Do not replace the WASM database with a JSON fallback. A packaging smoke must
+verify that the VSIX contains `dist/extension.js` and `dist/sql-wasm.wasm`, has
+no runtime `@freebuff/*` imports, and can import the extension bundle with only
+the VS Code API externalized.

@@ -74,6 +74,45 @@ describe("OpenAI-compatible provider", () => {
     expect(captured.authorization).toBeUndefined();
   });
 
+  test("replays restored assistant frames into one assistant message alongside tool history", async () => {
+    let captured: any;
+    const provider = new OpenAICompatibleProvider({
+      id: "minimax",
+      baseURL: "http://localhost/v1",
+      compatibility: { requiresAssistantFrameReplay: true },
+      fetch: async (_input, init) => { captured = JSON.parse(String(init?.body)); return streamResponse("data: [DONE]\n\n"); },
+    });
+    for await (const _event of provider.streamChat({
+      model: "MiniMax-M2.7",
+      messages: [
+        { role: "user", content: "read this" },
+        {
+          role: "assistant",
+          content: "I will read it.",
+          toolCalls: [{ id: "call-1", name: "read_file", arguments: '{"path":"a.ts"}' }],
+          providerFrames: [
+            { providerId: "minimax", modelId: "MiniMax-M2.7", sequence: 0, payload: { choices: [{ delta: { role: "assistant", content: "do not duplicate", opaque_before: "first" } }] } },
+            { providerId: "minimax", modelId: "MiniMax-M2.7", sequence: 1, payload: { choices: [{ delta: { content: "or leak", opaque_after: { trace: "second" } } }] } },
+            { providerId: "other", modelId: "MiniMax-M2.7", sequence: 2, payload: { choices: [{ delta: { unsafe: "foreign" } }] } },
+          ],
+        },
+        { role: "tool", toolCallId: "call-1", content: "file contents" },
+      ],
+    })) { /* consume */ }
+
+    expect(captured.messages.map((message: any) => message.role)).toEqual(["user", "assistant", "tool"]);
+    expect(captured.messages.filter((message: any) => message.role === "assistant")).toHaveLength(1);
+    expect(captured.messages[1]).toMatchObject({
+      role: "assistant",
+      content: "I will read it.",
+      opaque_before: "first",
+      opaque_after: { trace: "second" },
+    });
+    expect(captured.messages[1].content).not.toContain("do not duplicate");
+    expect(captured.messages[1].unsafe).toBeUndefined();
+    expect(captured.messages[1].tool_calls[0].function.arguments).toBe('{"path":"a.ts"}');
+  });
+
   test("normalizes retryability for rate limits and server failures", async () => {
     const provider = new OpenAICompatibleProvider({ id: "x", baseURL: "http://localhost/v1", fetch: async () => new Response(JSON.stringify({ error: { message: "slow down", code: "rate_limit" } }), { status: 429 }) });
     await expect(async () => { for await (const _event of provider.streamChat({ model: "m", messages: [] })) { /* consume */ } }).toThrow();

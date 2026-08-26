@@ -239,7 +239,7 @@ export class SessionStore {
     if (!options.filePath) throw new Error("SessionStore requires a filePath.");
     const initializer = options.sqlJs ?? (initSqlJs as unknown as SqlJsInitializer);
     const bytes = options.filePath === ":memory:" ? undefined : await readDatabase(options.filePath);
-    const module = await initializer({ locateFile: locateSqlWasm });
+    const module = await initializer({ locateFile: options.locateFile ?? locateSqlWasm });
     const store = new SessionStore(new module.Database(bytes), options);
     store.db.run("PRAGMA foreign_keys = ON");
     const migrated = store.migrate();
