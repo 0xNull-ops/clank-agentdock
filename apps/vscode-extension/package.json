@@ -1,0 +1,119 @@
+{
+  "name": "freebuff-agent-harness-vscode",
+  "displayName": "Freebuff Agent Harness",
+  "description": "A local-first, provider-agnostic coding agent harness for VS Code.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "freebuff",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.92.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onView:agentdock.agentView",
+    "onCommand:agentdock.open",
+    "onCommand:agentdock.setApiKey",
+    "onCommand:agentdock.clearApiKey",
+    "onCommand:agentdock.validateProvider"
+  ],
+  "main": "./dist/extension.js",
+  "dependencies": {
+    "@freebuff/agent-core": "file:../../packages/agent-core",
+    "@freebuff/provider-openai-compatible": "file:../../packages/providers/openai-compatible"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentdock.open",
+        "title": "Agent Harness: Open Chat"
+      },
+      {
+        "command": "agentdock.setApiKey",
+        "title": "Agent Harness: Set API Key"
+      },
+      {
+        "command": "agentdock.clearApiKey",
+        "title": "Agent Harness: Clear API Key"
+      },
+      {
+        "command": "agentdock.validateProvider",
+        "title": "Agent Harness: Validate Provider"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentdock",
+          "title": "Agent Harness",
+          "icon": "resources/agent.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentdock": [
+        {
+          "type": "webview",
+          "id": "agentdock.agentView",
+          "name": "Agent"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Agent Harness",
+      "properties": {
+        "agentdock.defaultMode": {
+          "type": "string",
+          "default": "ask",
+          "enum": ["ask", "plan", "architect", "implement", "debug", "review", "orchestrate", "custom"],
+          "description": "Mode used when a new Agent Harness session starts."
+        },
+        "agentdock.defaultModel": {
+          "type": "string",
+          "default": "openai-compatible",
+          "description": "Model id used when a new session starts. Configure the endpoint-specific id under Agent Harness › Provider: Model."
+        },
+        "agentdock.provider.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI-compatible provider base URL, for example http://127.0.0.1:8000/v1. API keys are never stored here."
+        },
+        "agentdock.provider.id": {
+          "type": "string",
+          "default": "openai-compatible",
+          "description": "Provider identifier used in session telemetry."
+        },
+        "agentdock.provider.name": {
+          "type": "string",
+          "default": "OpenAI Compatible",
+          "description": "Human-readable provider name."
+        },
+        "agentdock.provider.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model sent to the provider. Leave empty to use the model selected in chat."
+        },
+        "agentdock.provider.supportsDeveloperRole": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the configured endpoint accepts developer messages."
+        },
+        "agentdock.provider.supportsParallelToolCalls": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the configured endpoint accepts parallel_tool_calls."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build:packages": "tsc -p ../../packages/agent-core/tsconfig.json && tsc -p ../../packages/providers/openai-compatible/tsconfig.json",
+    "compile": "npm run build:packages && tsc -p ./tsconfig.json && tsc -p ./tsconfig.webview.json && cp src/webview/styles.css dist/webview/styles.css",
+    "watch": "tsc -p ./tsconfig.json --watch",
+    "typecheck": "npm run build:packages && tsc -p ./tsconfig.json --noEmit && tsc -p ./tsconfig.webview.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.92.0",
+    "typescript": "^5.5.4"
+  }
+}

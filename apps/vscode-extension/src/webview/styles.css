@@ -1,0 +1,87 @@
+:root {
+  --forge-canvas: var(--vscode-sideBar-background, #060a12);
+  --forge-surface: var(--vscode-editor-background, #090e18);
+  --forge-raised: var(--vscode-input-background, #0d1422);
+  --forge-hover: var(--vscode-list-hoverBackground, #101828);
+  --forge-selected: var(--vscode-list-activeSelectionBackground, #121b2d);
+  --forge-input: var(--vscode-input-background, #0a111e);
+  --forge-border: var(--vscode-widget-border, #253047);
+  --forge-border-strong: var(--vscode-input-border, #33415c);
+  --forge-text: var(--vscode-foreground, #f7f8fa);
+  --forge-text-secondary: var(--vscode-descriptionForeground, #b7c0cf);
+  --forge-text-tertiary: var(--vscode-descriptionForeground, #8c98aa);
+  --forge-muted: var(--vscode-disabledForeground, #8c98aa);
+  --forge-cyan: #22d3ee;
+  --forge-cyan-bright: #67e8f9;
+  --forge-cyan-dim: #0891b2;
+  --forge-violet: #a78bfa;
+  --forge-green: #4ade80;
+  --forge-amber: #fbbf24;
+  --forge-red: #fb7185;
+  --forge-on-accent: #090e18;
+  --forge-radius-sm: 6px;
+  --forge-radius-md: 8px;
+  --forge-radius-lg: 12px;
+  --forge-font: var(--vscode-font-family, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  --forge-code: var(--vscode-editor-font-family, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; }
+body { margin: 0; overflow: hidden; color: var(--forge-text); background: var(--forge-canvas); font: 13px/1.5 var(--forge-font); }
+button, select, textarea { font: inherit; }
+button { color: inherit; }
+button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 1px solid var(--forge-cyan); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+
+.shell { position: relative; display: flex; flex-direction: column; height: 100%; min-width: 280px; background: radial-gradient(ellipse 95% 40% at 100% 0%, rgba(34,211,238,.08), transparent 65%), radial-gradient(ellipse 80% 35% at 0% 100%, rgba(139,92,246,.07), transparent 70%), var(--forge-canvas); }
+.shell::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .27; background-image: linear-gradient(rgba(255,255,255,.026) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.026) 1px, transparent 1px); background-size: 32px 32px; mask-image: linear-gradient(to bottom, black, transparent 72%); }
+.header, .control-strip, .status-row, .transcript, .composer-wrap { position: relative; z-index: 1; }
+.header { display: flex; align-items: center; justify-content: space-between; height: 52px; padding: 0 16px; border-bottom: 1px solid rgba(37,48,71,.8); background: rgba(6,10,18,.72); }
+.brand { display: flex; gap: 10px; align-items: center; }
+.brand-mark { display: grid; place-items: center; width: 25px; height: 25px; color: var(--forge-on-accent); background: linear-gradient(135deg, var(--forge-cyan), var(--forge-violet)); border-radius: 7px; box-shadow: 0 0 18px rgba(34,211,238,.19); font-size: 15px; }
+.eyebrow, .kicker, .message-label { margin: 0; color: var(--forge-muted); font: 600 10px/1.2 var(--forge-code); letter-spacing: .1em; }
+h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; letter-spacing: -.01em; }
+.icon-button { width: 28px; height: 28px; border: 1px solid transparent; border-radius: var(--forge-radius-sm); background: transparent; color: var(--forge-text-tertiary); font-size: 18px; line-height: 1; cursor: pointer; }
+.icon-button:hover { border-color: var(--forge-border); background: var(--forge-hover); color: var(--forge-text); }
+
+.control-strip { display: flex; gap: 8px; padding: 12px 16px 7px; }
+.select-wrap { position: relative; display: flex; align-items: center; height: 30px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); background: rgba(13,20,34,.92); }
+.select-wrap:hover { border-color: var(--forge-border-strong); }
+.select-wrap select { appearance: none; min-width: 0; height: 100%; padding: 0 25px 0 9px; border: 0; outline: 0; color: var(--forge-text-secondary); background: transparent; cursor: pointer; font-size: 12px; }
+.select-wrap select option { color: var(--forge-text); background: var(--forge-raised); }
+.mode-select select { padding-left: 5px; }
+.mode-dot { width: 7px; height: 7px; margin-left: 9px; border-radius: 50%; background: var(--forge-cyan); box-shadow: 0 0 8px currentColor; }
+.mode-dot.mode-ask { background: #60a5fa; }.mode-dot.mode-plan { background: var(--forge-violet); }.mode-dot.mode-architect { background: #f472b6; }.mode-dot.mode-debug { background: var(--forge-amber); }.mode-dot.mode-review { background: var(--forge-green); }.mode-dot.mode-orchestrate { background: #a3e635; }.mode-dot.mode-custom { background: var(--forge-text-secondary); }
+.model-glyph { margin-left: 9px; color: var(--forge-violet); font-size: 12px; }.chevron { position: absolute; right: 8px; color: var(--forge-muted); pointer-events: none; font-size: 13px; transform: translateY(-1px); }
+.status-row { display: flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 16px 5px; color: var(--forge-muted); font-size: 11px; }.status-dot, .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--forge-green); }.status-dot.pulse { background: var(--forge-cyan); box-shadow: 0 0 10px var(--forge-cyan); animation: pulse 1.4s ease-in-out infinite; }.status-spacer { flex: 1; }.context-label strong { color: var(--forge-text-tertiary); font-weight: 500; }.context-track { width: 30px; height: 3px; overflow: hidden; border-radius: 9px; background: var(--forge-border); }.context-track span { display: block; height: 100%; border-radius: inherit; background: var(--forge-cyan); }
+.rule { position: relative; z-index: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--forge-border), transparent); }
+
+.transcript { flex: 1; overflow: auto; padding: 20px 16px 14px; scrollbar-width: thin; scrollbar-color: var(--forge-border) transparent; }.transcript::-webkit-scrollbar { width: 5px; }.transcript::-webkit-scrollbar-thumb { background: var(--forge-border); border-radius: 5px; }
+.empty-state { max-width: 330px; margin: 9vh auto 0; text-align: center; animation: rise .45s cubic-bezier(.2,0,0,1) both; }.orbit { position: relative; display: grid; place-items: center; width: 58px; height: 58px; margin: 0 auto 18px; border: 1px solid rgba(34,211,238,.38); border-radius: 18px; color: var(--forge-cyan); background: linear-gradient(135deg, rgba(34,211,238,.1), rgba(139,92,246,.16)); box-shadow: inset 0 0 25px rgba(34,211,238,.08), 0 0 35px rgba(34,211,238,.08); font-size: 24px; }.orbit::before, .orbit::after { content: ""; position: absolute; border: 1px solid rgba(167,139,250,.2); border-radius: 50%; }.orbit::before { inset: -9px; transform: rotate(35deg) skewX(20deg); }.orbit::after { inset: -15px; transform: rotate(-22deg) skewX(-25deg); opacity: .55; }.empty-state .kicker { color: var(--forge-cyan-dim); }.empty-state h2 { margin: 7px 0 7px; font-size: 22px; line-height: 1.2; letter-spacing: -.04em; }.empty-copy { margin: 0 auto; max-width: 280px; color: var(--forge-text-tertiary); line-height: 1.6; }.starter-grid { display: grid; gap: 6px; margin-top: 22px; }.starter { display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); color: var(--forge-text-secondary); background: rgba(13,20,34,.65); text-align: left; cursor: pointer; transition: border-color .18s ease, background .18s ease, transform .18s ease; }.starter span { color: var(--forge-cyan); }.starter:hover { border-color: rgba(34,211,238,.55); background: var(--forge-selected); transform: translateY(-1px); }
+.message { margin: 0 auto 17px; max-width: 640px; animation: rise .25s ease both; }.message-label { margin-bottom: 5px; }.message.user { padding: 11px 12px; border: 1px solid rgba(37,48,71,.85); border-radius: var(--forge-radius-md); background: rgba(13,20,34,.78); }.message.user .message-label { color: var(--forge-violet); }.message.assistant .message-label { color: var(--forge-cyan); }.message.system { padding: 8px 10px; border-left: 2px solid var(--forge-muted); color: var(--forge-text-tertiary); background: rgba(13,20,34,.45); }.message-body { color: var(--forge-text-secondary); white-space: normal; }.message.user .message-body { color: var(--forge-text); }
+.tool-card { max-width: 640px; margin: 9px auto; overflow: hidden; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: rgba(13,20,34,.84); }.tool-card summary { display: flex; align-items: center; gap: 9px; min-height: 46px; padding: 8px 10px; cursor: pointer; list-style: none; }.tool-card summary::-webkit-details-marker { display: none; }.tool-card summary > span:nth-child(2) { display: grid; flex: 1; gap: 1px; }.tool-card b { color: var(--forge-text-secondary); font-size: 12px; font-weight: 600; }.tool-card small { color: var(--forge-muted); font-size: 11px; }.tool-icon { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: var(--forge-cyan); background: rgba(34,211,238,.09); }.tool-icon.complete { color: var(--forge-green); background: rgba(74,222,128,.09); }.tool-icon.error { color: var(--forge-red); background: rgba(251,113,133,.09); }.tool-state { color: var(--forge-muted); font: 10px var(--forge-code); }.tool-card pre { margin: 0; padding: 10px 11px; overflow: auto; border-top: 1px solid var(--forge-border); color: var(--forge-text-tertiary); background: var(--forge-input); font: 11px/1.5 var(--forge-code); }
+.approval-card { max-width: 640px; margin: 13px auto; padding: 13px; border: 1px solid rgba(251,191,36,.35); border-radius: var(--forge-radius-md); background: linear-gradient(125deg, rgba(46,40,17,.55), rgba(13,20,34,.86)); }.approval-heading { display: flex; align-items: center; gap: 9px; }.approval-heading > div { flex: 1; }.approval-heading h3 { margin: 2px 0 0; font-size: 13px; }.approval-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 7px; color: var(--forge-amber); background: rgba(251,191,36,.12); }.risk { padding: 3px 6px; border-radius: 9px; font: 10px var(--forge-code); text-transform: uppercase; }.risk.high { color: var(--forge-red); background: rgba(251,113,133,.1); }.risk.medium { color: var(--forge-amber); background: rgba(251,191,36,.1); }.risk.low { color: var(--forge-green); background: rgba(74,222,128,.1); }.approval-card p { margin: 12px 0 3px; color: var(--forge-text-secondary); }.approval-card small { color: var(--forge-muted); }.approval-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+
+.composer-wrap { padding: 8px 16px 13px; background: linear-gradient(to top, rgba(6,10,18,.98) 68%, transparent); }.context-chips { display: flex; gap: 5px; overflow: auto; margin-bottom: 6px; scrollbar-width: none; }.context-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 180px; padding: 4px 6px 4px 8px; border: 1px solid rgba(34,211,238,.28); border-radius: 999px; color: var(--forge-text-secondary); background: rgba(34,211,238,.07); font-size: 11px; white-space: nowrap; }.context-chip > span { color: var(--forge-cyan); }.context-chip button { padding: 0 2px; border: 0; color: var(--forge-muted); background: transparent; cursor: pointer; }.context-chip button:hover { color: var(--forge-text); }.composer { min-height: 86px; border: 1px solid var(--forge-border-strong); border-radius: var(--forge-radius-lg); background: linear-gradient(135deg, rgba(10,17,30,.98), rgba(13,20,34,.9)); box-shadow: 0 8px 24px rgba(0,0,0,.28); transition: border-color .18s ease, box-shadow .18s ease; }.composer:focus-within { border-color: var(--forge-cyan); box-shadow: 0 0 0 2px rgba(34,211,238,.15), 0 8px 24px rgba(0,0,0,.28); }.composer textarea { display: block; width: 100%; min-height: 53px; max-height: 180px; padding: 11px 12px 5px; resize: vertical; border: 0; outline: 0; color: var(--forge-text); background: transparent; }.composer textarea::placeholder { color: var(--forge-muted); }.composer-actions { display: flex; align-items: center; gap: 7px; padding: 4px 8px 8px; }.quiet-button, .approve-button, .text-button { border: 0; border-radius: var(--forge-radius-sm); cursor: pointer; }.quiet-button { padding: 5px 7px; color: var(--forge-text-tertiary); background: transparent; font-size: 11px; }.quiet-button:hover { color: var(--forge-text); background: var(--forge-hover); }.composer-hint { flex: 1; color: var(--forge-muted); font-size: 10px; text-align: right; }.send-button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: var(--forge-radius-sm); color: var(--forge-on-accent); background: var(--forge-cyan); cursor: pointer; font-size: 17px; font-weight: 700; transition: transform .18s ease, background .18s ease; }.send-button:hover { background: var(--forge-cyan-bright); transform: translateY(-1px); }.approve-button { padding: 7px 10px; color: var(--forge-on-accent); background: var(--forge-amber); font-size: 11px; font-weight: 600; }.approve-button:hover { background: var(--forge-amber); }.composer-meta { display: flex; justify-content: space-between; padding: 7px 2px 0; color: var(--forge-muted); font: 10px var(--forge-code); }.composer-meta > span { display: flex; align-items: center; gap: 5px; }.text-button { padding: 0; color: var(--forge-muted); background: transparent; font: inherit; }.text-button:hover { color: var(--forge-text-secondary); }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse { 0%, 100% { opacity: .45; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
+@media (max-width: 340px) { .model-select { max-width: 145px; }.model-select select { max-width: 110px; }.composer-hint { display: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+
+/* IDE-native semantic layer: Forge accents remain distinctive while the user's
+   VS Code theme owns canvas, surfaces, borders, and text contrast. */
+.header { border-bottom-color: var(--forge-border); background: color-mix(in srgb, var(--forge-canvas) 84%, transparent); }
+.select-wrap { background: color-mix(in srgb, var(--forge-raised) 92%, transparent); }
+.starter { background: color-mix(in srgb, var(--forge-raised) 68%, transparent); }
+.message.user { border-color: var(--forge-border); background: color-mix(in srgb, var(--forge-raised) 80%, transparent); }
+.message.system { background: color-mix(in srgb, var(--forge-raised) 48%, transparent); }
+.tool-card { background: color-mix(in srgb, var(--forge-raised) 86%, transparent); }
+.composer-wrap { background: linear-gradient(to top, color-mix(in srgb, var(--forge-canvas) 98%, transparent) 68%, transparent); }
+.composer { background: linear-gradient(135deg, var(--forge-input), var(--forge-raised)); }
+
+@media (forced-colors: active) {
+  .shell::after, .orbit::before, .orbit::after { display: none; }
+  .tool-card, .composer, .starter, .message.user, .approval-card { border-color: CanvasText; }
+  .brand-mark, .send-button, .approve-button { forced-color-adjust: auto; }
+}

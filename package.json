@@ -1,0 +1,20 @@
+{
+  "name": "forge-agent-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first, provider-agnostic coding-agent harness with a VS Code client.",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "packages/providers/*"
+  ],
+  "scripts": {
+    "build": "npm --prefix apps/vscode-extension run compile",
+    "typecheck": "npm --prefix apps/vscode-extension run typecheck",
+    "test": "bun test packages/agent-core/test packages/providers/openai-compatible/test",
+    "check": "npm run test && npm run typecheck && npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
