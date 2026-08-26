@@ -127,11 +127,23 @@ export interface SessionListOptions {
   beforeUpdatedAt?: number;
 }
 
-export interface TranscriptOptions {
+/** Optional workspace guard for a session operation.
+ *
+ * Session ids are globally unique, but callers that operate on behalf of a
+ * workspace should pass this guard so a stale or misrouted id cannot mutate or
+ * export a session belonging to another workspace.
+ */
+export interface SessionScopeOptions {
+  workspaceId?: string;
+}
+
+export interface TranscriptOptions extends SessionScopeOptions {
   /** Upper bound per collection. Defaults to 500 and is capped at 2,000. */
   limit?: number;
-  /** Include opaque provider frames only when explicitly requested. */
+  /** Include opaque provider transcript rows only when explicitly requested. */
   includeProviderMessages?: boolean;
+  /** Include opaque provider frames only for an explicit host-side export. */
+  includeProviderFrames?: boolean;
 }
 
 export interface SessionExport extends Omit<SessionSnapshot, "providerMessages"> {

@@ -1584,6 +1584,18 @@ Secrets must use VS Code SecretStorage or OS credential storage.
 
 Never store API keys in workspace config by default.
 
+Provider settings are represented as named profiles. Profile metadata (display
+name, provider type, base URL, non-secret headers, model metadata, defaults, and
+compatibility overrides) is stored in VS Code `globalState`; credentials are
+stored separately in `SecretStorage` under a profile-specific key. A profile
+record must never contain an API key, authorization header, URL credentials, or
+other secret-like header value. Deleting a profile also deletes its credential
+and cannot leave the deleted profile selected as active.
+
+The profile store must serialize mutations and make legacy-setting migration
+idempotent. Keeping a legacy setting or legacy secret during migration is
+allowed for rollback, but new reads and writes use the profile store.
+
 ---
 
 # 18. Model Selection
@@ -1611,6 +1623,18 @@ Precedence:
 ```text
 turn > session > mode > global
 ```
+
+For the profile-based provider router, `global` means the active provider
+profile's `defaultModel` (with the configured global fallback used only when no
+profile default exists). The effective resolution is therefore:
+
+```text
+one-turn override > session selection > mode default > active profile default > global fallback
+```
+
+An explicitly fixed mode/model policy is higher priority than user overrides:
+the selector must show that the model is fixed and the runtime must reject an
+incompatible session or turn override with a structured explanation.
 
 ---
 
@@ -2119,6 +2143,21 @@ Exact provider-specific messages required to continue a tool/reasoning chain.
 
 This is especially important for providers that require their own reasoning payload to be replayed.
 
+## 32.4 Workspace-scoped session lifecycle
+
+Sessions are owned by a workspace identity. List, open, rename, duplicate,
+delete, and export operations must enforce that identity in the storage query;
+the UI must not be able to address a session from another workspace by guessing
+its ID. Rename trims surrounding whitespace, rejects an empty title, and caps a
+title at 200 characters.
+
+The host may retain the provider transcript and opaque provider frames for
+continuation, but a UI restore returns only the normalized transcript. Session
+exports are safe by default: they include session metadata and normalized
+messages, exclude provider transcript rows and opaque frames, and require an
+explicit host-side opt-in for any diagnostic export that contains provider
+frames. No webview command can request that opt-in.
+
 ---
 
 # 33. Checkpoints / Snapshots
@@ -2127,7 +2166,10 @@ Required.
 
 ## 33.1 Recommended implementation
 
-Dedicated Git object repository stored outside the user's normal `.git`.
+Use durable filesystem snapshot manifests and content-addressed blobs stored
+outside the workspace and outside the user's normal `.git`. This keeps the
+checkpoint store independent of Git history without requiring a second Git
+object database.
 
 Capture at least:
 
@@ -2137,6 +2179,15 @@ Capture at least:
 Optional:
 
 - each mutating step
+
+Restore is a transaction. Before changing the workspace, stage the target
+files, move affected current files into a transaction backup, and persist a
+durable journal outside the workspace. The journal records the workspace,
+changed paths, backup/install state, and restore phase. If the host crashes or
+an operation fails during backup or installation, the next checkpoint
+operation must detect the incomplete transaction and recover it before doing
+new work. A successful restore removes the transaction journal only after all
+files and modes have been installed.
 
 ## 33.2 UI
 
@@ -2163,6 +2214,12 @@ Respect:
 - agent ignore file
 - configured protected paths
 - secrets
+
+The before/after manifests record exclusions and their reasons. Revert first
+compares the current workspace with the recorded post-turn manifest; if a user
+or another process changed a tracked or untracked path after the turn, revert
+must refuse with the conflicting paths rather than overwrite them. Journal
+recovery must not weaken this conflict guard.
 
 ---
 
@@ -3020,6 +3077,30 @@ No API keys in:
 - project configuration
 - provider error telemetry
 
+## 59.5 Context attachment boundary
+
+Context selection is a host-owned capability, not a webview data channel. The
+webview may submit only an opaque context ID and display metadata; the extension
+host resolves that ID to a snapshot captured through trusted VS Code APIs. The
+host must ignore or reject forged IDs, URI/content fields, and snapshots that do
+not exist in its in-memory context registry. Snapshots are never sent back to
+the webview as file contents.
+
+The first VS Code slice uses bounded sources:
+
+| Source | Bound |
+|---|---:|
+| current selection | 32,000 characters |
+| selected file | 64,000 characters |
+| workspace-folder listing | 200 entries |
+| current diagnostics | 500 diagnostics |
+| combined context inserted into one prompt | 128,000 characters |
+
+The bounds are enforced before prompt composition, with deterministic
+truncation or an explicit omission note. Context labels and URIs are metadata;
+they are not authority to read arbitrary paths. Files must still pass workspace
+and symlink validation when the host captures them.
+
 ---
 
 # 60. Logging
@@ -3107,6 +3188,11 @@ Cover:
 - checkpoint metadata
 - config precedence
 - provider compatibility transforms
+- host-owned context IDs, source bounds, aggregate prompt bound, and forged-ref rejection
+- workspace-scoped session CRUD and title validation
+- safe session export with provider frames excluded by default
+- profile persistence, credential isolation, serialized mutation, and model precedence
+- checkpoint restore journal recovery after backup/install interruption
 
 ## 63.2 Provider contract tests
 
@@ -3165,6 +3251,9 @@ Test:
 - diff opens
 - checkpoint restore
 - diagnostics fetch
+- native context picker and host-only snapshot resolution
+- session rename, duplicate, delete, and Markdown/JSON export
+- provider profile selection and SecretStorage-backed credentials
 
 ---
 
@@ -3360,6 +3449,21 @@ The harness/tool behavior should remain unchanged.
 - [ ] session history
 - [ ] context meter
 - [ ] custom mode editor
+
+## Persistence and boundary hardening
+
+- [ ] Context attachments cross the webview boundary as IDs only; the host
+      enforces the per-source and aggregate bounds in §59.5
+- [ ] Session list/open/rename/duplicate/delete/export operations are scoped to
+      the active workspace identity
+- [ ] Session export excludes provider transcript rows and opaque provider
+      frames by default
+- [ ] Provider profile metadata persists in `globalState`, while each profile's
+      credential persists only in `SecretStorage`
+- [ ] Model resolution follows one-turn > session > mode > active-profile
+      default > global fallback, subject to fixed-model policy
+- [ ] A checkpoint revert refuses post-turn drift and recovers an interrupted
+      restore transaction from its durable journal before the next operation
 
 ---
 
@@ -4177,3 +4281,79 @@ The extension must not assume that Inter is installed: UI typography falls back 
 component colors. Mode and status meaning must be conveyed by text/icon as well as
 color. The token build validates the declared Design Tokens format in CI and emits
 a generated CSS artifact consumed by the webview.
+
+## 83.7 Context snapshots are host-owned and bounded
+
+The VS Code context picker is the authority for attaching workspace context.
+The webview sends an opaque ID plus display metadata; it never supplies the
+snapshot payload. The extension host keeps the snapshot in an in-memory,
+session-scoped registry, resolves only IDs it issued, and composes a bounded
+host-side prompt. The source and aggregate limits are the limits in §59.5:
+32,000 characters for a selection, 64,000 for a file, 200 folder entries, 500
+diagnostics, and 128,000 characters total per prompt. Context IDs are not
+workspace read permissions and do not bypass path, trust, or symlink checks.
+
+Acceptance evidence must include a forged-ID test, a forged-payload test, and
+boundary tests at and above every limit. The tests must also demonstrate that
+context contents are absent from messages sent back to the webview.
+
+## 83.8 Safe, workspace-scoped session persistence
+
+The durable session database is local to the extension host. Every session
+operation carries or derives the active workspace identity, and the storage
+layer enforces that scope rather than relying on UI filtering. The normalized
+transcript is the portable product history; provider transcripts and opaque
+frames remain host-only continuation state. The default Markdown/JSON export is
+therefore safe to share and excludes provider rows and frames. A diagnostic
+export that includes them, if added later, must be an explicit host-only path
+with a warning and must never be reachable by a webview-supplied boolean.
+
+Acceptance evidence must cover cross-workspace access denial, rename/delete
+cascade behavior, duplicate-session isolation, reopen after restart, and
+byte-level confirmation that default exports contain no provider frames or
+credentials.
+
+## 83.9 Provider profiles and model resolution
+
+The active provider registry stores profile metadata in VS Code `globalState`.
+Each profile's API key is addressed by a profile-specific `SecretStorage` key;
+raw credentials must not appear in profile JSON, workspace settings, logs, or
+exports. Profile mutations are serialized, validate URLs/headers/model data,
+and safely migrate legacy settings without deleting the rollback source.
+
+Resolve a model in this order:
+
+```text
+one-turn override > session selection > mode default > active profile default > global fallback
+```
+
+Fixed model policies reject lower-priority overrides and explain the rejection
+in the UI. A provider/model selector must show the active profile and whether
+the displayed model is fixed, preferred, or user-selectable.
+
+Acceptance evidence must cover credential isolation across two profiles,
+idempotent migration, serialized adjacent updates, manual model entries,
+mode defaults, and each precedence branch.
+
+## 83.10 Crash-recoverable checkpoint restore
+
+Checkpoint snapshots remain independent of normal Git history and are stored
+outside the workspace. A revert is guarded by an exact post-turn manifest
+comparison, then executes through a durable journaled transaction. The journal
+must identify every changed path and whether its pre-state was backed up and its
+target installed. Recovery is attempted before every subsequent checkpoint
+operation; recovery must leave the workspace at the pre-restore state (or fail
+closed with a clear error) and must not delete user edits outside the journal's
+declared paths.
+
+Acceptance evidence must include an injected interruption during backup and
+installation, restart/recovery, binary and untracked files, mode restoration,
+and a post-turn drift conflict. A passing happy-path revert alone is not enough.
+
+## 83.11 Verification status
+
+These contracts make the VS Code vertical slice concrete; they do not by
+themselves certify that the product is complete. Each acceptance item remains
+unchecked until its named test or runtime evidence exists. Any implementation
+that cannot provide the evidence must be treated as incomplete, even when the
+corresponding UI is present.

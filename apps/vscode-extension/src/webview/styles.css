@@ -53,14 +53,22 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .session-menu-heading { display: flex; align-items: center; justify-content: space-between; padding: 5px 7px 6px; color: var(--forge-muted); font: 600 9px var(--forge-code); letter-spacing: .1em; }
 .session-menu-heading button { padding: 2px 5px; border: 0; border-radius: 4px; color: var(--forge-muted); background: transparent; cursor: pointer; font-size: 14px; }
 .session-menu-heading button:hover { color: var(--forge-text); background: var(--forge-hover); }
-.session-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 7px; border: 0; border-radius: var(--forge-radius-sm); color: var(--forge-text-secondary); background: transparent; text-align: left; cursor: pointer; }
+.session-search { box-sizing: border-box; width: calc(100% - 8px); margin: 0 4px 5px; padding: 7px 8px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); outline: none; color: var(--forge-text); background: var(--forge-surface); font: 10px var(--forge-code); }
+.session-search:focus { border-color: var(--forge-cyan); }
+.session-item { display: flex; align-items: center; width: 100%; min-height: 44px; border-radius: var(--forge-radius-sm); color: var(--forge-text-secondary); background: transparent; }
 .session-item:hover, .session-item.active { background: var(--forge-selected); color: var(--forge-text); }
-.session-item:disabled { cursor: wait; opacity: .6; }
+.session-item[hidden] { display: none; }
+.session-item-open { display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px; padding: 7px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.session-item-open:disabled { cursor: wait; opacity: .6; }
 .session-item-main { display: grid; flex: 1; min-width: 0; gap: 2px; }
 .session-item-main b { overflow: hidden; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .session-item-main small { color: var(--forge-muted); font: 9px var(--forge-code); }
 .session-item-status { min-width: 35px; color: var(--forge-cyan); font: 9px var(--forge-code); text-align: right; text-transform: uppercase; }
 .session-item-status.waiting { color: var(--forge-amber); }
+.session-item-actions { display: none; align-items: center; padding-right: 4px; }
+.session-item:hover .session-item-actions, .session-item:focus-within .session-item-actions { display: flex; }
+.session-item-actions button { width: 23px; height: 23px; padding: 0; border: 0; border-radius: 4px; color: var(--forge-muted); background: transparent; cursor: pointer; }
+.session-item-actions button:hover { color: var(--forge-text); background: var(--forge-hover); }
 .session-empty { margin: 10px 7px; color: var(--forge-muted); font-size: 11px; }
 
 .control-strip { display: flex; gap: 8px; padding: 12px 16px 7px; }

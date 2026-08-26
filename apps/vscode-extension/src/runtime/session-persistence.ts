@@ -13,6 +13,7 @@ import {
   SessionStore,
   type ApprovalRecord,
   type SessionListOptions,
+  type SessionExport,
   type SessionSnapshot,
   type SessionStoreOptions,
   type SqlJsInitializer,
@@ -131,15 +132,62 @@ export class SessionPersistenceCoordinator {
   }
 
   /** List sessions, scoped to the current workspace by default. */
-  public async list(options: SessionListOptions & { allWorkspaces?: boolean } = {}): Promise<AgentSession[]> {
+  public async list(options: SessionListOptions = {}): Promise<AgentSession[]> {
     const store = await this.requireStore();
-    const workspaceId = options.allWorkspaces ? undefined : options.workspaceId ?? this.workspaceId();
-    const { allWorkspaces: _allWorkspaces, ...storeOptions } = options;
-    return store.listSessions({ ...storeOptions, workspaceId });
+    return store.listSessions({ ...options, workspaceId: this.workspaceId() });
   }
 
-  public listSessions(options: SessionListOptions & { allWorkspaces?: boolean } = {}): Promise<AgentSession[]> {
+  public listSessions(options: SessionListOptions = {}): Promise<AgentSession[]> {
     return this.list(options);
+  }
+
+  public async getSession(sessionId: string): Promise<AgentSession | undefined> {
+    const cached = this.sessions.get(sessionId);
+    if (cached?.workspaceId === this.workspaceId()) return cached;
+    return (await this.requireStore()).getSession(sessionId, { workspaceId: this.workspaceId() });
+  }
+
+  public async renameSession(sessionId: string, title: string): Promise<AgentSession | undefined> {
+    const renamed = await (await this.requireStore()).renameSession(sessionId, title, { workspaceId: this.workspaceId() });
+    if (renamed) this.sessions.set(renamed.id, renamed);
+    return renamed;
+  }
+
+  public async deleteSession(sessionId: string): Promise<boolean> {
+    await this.eventQueue;
+    const deleted = await (await this.requireStore()).deleteSession(sessionId, { workspaceId: this.workspaceId() });
+    if (deleted) {
+      this.sessions.delete(sessionId);
+      this.replay.delete(sessionId);
+      this.providerTranscripts.delete(sessionId);
+    }
+    return deleted;
+  }
+
+  /** Export only UI-safe normalized data; opaque provider continuation data stays host-only. */
+  public async exportSession(sessionId: string): Promise<SessionExport | undefined> {
+    await this.eventQueue;
+    return (await this.requireStore()).exportSession(sessionId, { workspaceId: this.workspaceId() });
+  }
+
+  public async duplicateSession(sessionId: string): Promise<AgentSession | undefined> {
+    await this.eventQueue;
+    const source = await (await this.requireStore()).exportSession(sessionId, {
+      workspaceId: this.workspaceId(),
+      includeProviderFrames: true,
+      limit: 2_000,
+    });
+    if (!source) return undefined;
+    if (source.truncated) throw new Error("This session is too large to duplicate safely. Export it instead.");
+    const copyTitle = [...`Copy of ${source.session.title}`].slice(0, 200).join("");
+    const duplicate = await this.newSession({
+      title: copyTitle,
+      activeMode: source.session.activeMode,
+      providerId: source.session.providerId,
+      modelId: source.session.modelId,
+    });
+    for (const stored of source.messages) await this.appendMessage(duplicate.id, stored.message);
+    return duplicate;
   }
 
   /**
@@ -163,7 +211,11 @@ export class SessionPersistenceCoordinator {
   /** Open the full host-only snapshot when storage records are needed. */
   public async openSnapshot(sessionId: string): Promise<SessionSnapshot | undefined> {
     const store = await this.requireStore();
-    const snapshot = await store.openSession(sessionId, { includeProviderMessages: true });
+    const snapshot = await store.openSession(sessionId, {
+      workspaceId: this.workspaceId(),
+      includeProviderMessages: true,
+      includeProviderFrames: true,
+    });
     if (snapshot) this.cacheSnapshot(snapshot);
     return snapshot;
   }
@@ -220,7 +272,7 @@ export class SessionPersistenceCoordinator {
     patch: { activeMode?: string; modelId?: string },
   ): Promise<AgentSession | undefined> {
     const store = await this.requireStore();
-    const current = this.sessions.get(sessionId) ?? await store.getSession(sessionId);
+    const current = this.sessions.get(sessionId) ?? await store.getSession(sessionId, { workspaceId: this.workspaceId() });
     if (!current) return undefined;
     if (patch.activeMode && patch.activeMode !== current.activeMode) {
       await store.recordModeTransition(sessionId, {
@@ -283,7 +335,8 @@ export class SessionPersistenceCoordinator {
     const status = Array.isArray(result)
       ? this.sessions.get(session.id)?.status ?? session.status
       : statusFromRun(result.status);
-    await this.saveSession({ ...session, status, updatedAt: this.clock() });
+    const latest = this.sessions.get(session.id) ?? session;
+    await this.saveSession({ ...latest, status, updatedAt: this.clock() });
   }
 
   /** Resolve a persisted approval after the user acts in the UI. */
@@ -451,7 +504,7 @@ export class SessionPersistenceCoordinator {
 
   private async updateSessionStatus(sessionId: string, status: AgentSession["status"]): Promise<void> {
     let session = this.sessions.get(sessionId);
-    if (!session) session = await (await this.requireStore()).getSession(sessionId);
+    if (!session) session = await (await this.requireStore()).getSession(sessionId, { workspaceId: this.workspaceId() });
     if (!session) return;
     await this.saveSession({ ...session, status, updatedAt: this.clock() });
   }

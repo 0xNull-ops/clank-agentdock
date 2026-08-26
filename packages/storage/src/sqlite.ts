@@ -17,6 +17,7 @@ import type {
   RecoveryResult,
   SessionExport,
   SessionListOptions,
+  SessionScopeOptions,
   SessionSnapshot,
   SessionStoreOptions,
   SqlJsDatabase,
@@ -30,6 +31,8 @@ import type {
 } from "./types";
 
 export const SCHEMA_VERSION = 1;
+/** Maximum number of Unicode code points permitted in a session title. */
+export const MAX_SESSION_TITLE_LENGTH = 200;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2_000;
 
@@ -243,6 +246,10 @@ export class SessionStore {
     const store = new SessionStore(new module.Database(bytes), options);
     store.db.run("PRAGMA foreign_keys = ON");
     const migrated = store.migrate();
+    // Keep the invariant true after migrations as well. SQLite ignores a
+    // foreign_keys pragma issued while a transaction is active, and existing
+    // databases may have been opened with it disabled by another client.
+    store.db.run("PRAGMA foreign_keys = ON");
     store.recovery = store.recoverInterruptedSessionsSync();
     if (migrated || store.recovery.sessionIds.length > 0 || store.recovery.approvalIds.length > 0) {
       await store.persist();
@@ -289,8 +296,49 @@ export class SessionStore {
     });
   }
 
-  public async getSession(sessionId: string): Promise<AgentSession | undefined> {
-    return this.enqueue(() => this.getSessionSync(sessionId));
+  public async getSession(sessionId: string, options: SessionScopeOptions = {}): Promise<AgentSession | undefined> {
+    return this.enqueue(() => this.getSessionSync(sessionId, options.workspaceId));
+  }
+
+  /**
+   * Rename a session and update its recency timestamp.
+   *
+   * A workspace guard is optional for compatibility with globally unique
+   * session ids, but callers operating in a workspace should always provide
+   * it. A mismatched guard is treated like a missing session and does not
+   * reveal or mutate the other workspace's session.
+   */
+  public async renameSession(
+    sessionId: string,
+    title: string,
+    options: SessionScopeOptions = {},
+  ): Promise<AgentSession | undefined> {
+    const normalizedTitle = normalizeSessionTitle(title);
+    return this.mutate(() => {
+      const existing = this.getSessionSync(sessionId, options.workspaceId);
+      if (!existing) return undefined;
+      const updated = { ...existing, title: normalizedTitle, updatedAt: this.clock() };
+      this.db.run("UPDATE sessions SET title=?, updated_at=? WHERE id=?", [normalizedTitle, updated.updatedAt, sessionId]);
+      return updated;
+    });
+  }
+
+  /**
+   * Delete a session and all of its transcript, run, tool, approval, and usage
+   * rows in one durable transaction. Foreign-key cascades are enabled when
+   * the database opens; the workspace guard prevents deleting a same-id
+   * session routed from a different workspace.
+   */
+  public async deleteSession(
+    sessionId: string,
+    options: SessionScopeOptions = {},
+  ): Promise<boolean> {
+    return this.mutate(() => {
+      const existing = this.getSessionSync(sessionId, options.workspaceId);
+      if (!existing) return false;
+      this.db.run("DELETE FROM sessions WHERE id=?", [sessionId]);
+      return true;
+    });
   }
 
   public async listSessions(options: SessionListOptions = {}): Promise<AgentSession[]> {
@@ -497,7 +545,10 @@ export class SessionStore {
       const snapshot = this.snapshotSync(sessionId, options);
       if (!snapshot) return undefined;
       const includeProvider = options.includeProviderMessages === true;
-      const messages = snapshot.messages.map((stored) => ({ ...stored, message: stripProviderFrames(stored.message) }));
+      const messages = snapshot.messages.map((stored) => ({
+        ...stored,
+        message: options.includeProviderFrames === true ? stored.message : stripProviderFrames(stored.message),
+      }));
       const { providerMessages: _providerMessages, ...withoutProviderMessages } = snapshot;
       return {
         ...withoutProviderMessages,
@@ -588,13 +639,20 @@ export class SessionStore {
   private async persist(): Promise<void> {
     this.assertOpen();
     if (this.filePath === ":memory:") return;
-    await atomicWrite(this.filePath, this.db.export());
+    const bytes = this.db.export();
+    // sql.js resets connection pragmas while materializing an exported
+    // database. Restore foreign-key enforcement before the next mutation so
+    // session deletion keeps its ON DELETE CASCADE contract.
+    this.db.run("PRAGMA foreign_keys = ON");
+    await atomicWrite(this.filePath, bytes);
   }
 
-  private getSessionSync(sessionId: string): AgentSession | undefined {
+  private getSessionSync(sessionId: string, workspaceId?: string): AgentSession | undefined {
+    const workspaceClause = workspaceId === undefined ? "" : " AND workspace_id=?";
     return this.rows<AgentSession>(
-      "SELECT id, workspace_id, title, created_at, updated_at, active_mode, provider_id, model_id, status FROM sessions WHERE id=?",
-      [sessionId],
+      `SELECT id, workspace_id, title, created_at, updated_at, active_mode, provider_id, model_id, status
+         FROM sessions WHERE id=?${workspaceClause}`,
+      workspaceId === undefined ? [sessionId] : [sessionId, workspaceId],
       (row) => this.sessionFromRow(row),
     )[0];
   }
@@ -614,7 +672,7 @@ export class SessionStore {
   }
 
   private snapshotSync(sessionId: string, options: TranscriptOptions): SessionSnapshot | undefined {
-    const session = this.getSessionSync(sessionId);
+    const session = this.getSessionSync(sessionId, options.workspaceId);
     if (!session) return undefined;
     const limit = limitOf(options.limit);
     const messages = this.rows<StoredMessage>(
@@ -772,6 +830,15 @@ function normalizeParams(params?: unknown[] | Record<string, unknown>): unknown[
   if (params === undefined) return undefined;
   if (Array.isArray(params)) return params.map((item) => item === undefined ? null : item);
   return Object.fromEntries(Object.entries(params).map(([key, item]) => [key, item === undefined ? null : item]));
+}
+
+function normalizeSessionTitle(title: string): string {
+  const normalized = typeof title === "string" ? title.trim() : "";
+  if (normalized.length === 0) throw new Error("Session title must be non-empty.");
+  if ([...normalized].length > MAX_SESSION_TITLE_LENGTH) {
+    throw new Error(`Session title must be at most ${MAX_SESSION_TITLE_LENGTH} characters.`);
+  }
+  return normalized;
 }
 
 function escapeSql(input: string): string {

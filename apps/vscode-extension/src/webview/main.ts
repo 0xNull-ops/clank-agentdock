@@ -35,6 +35,7 @@ let sessions: SessionHistoryItem[] = [];
 let activeSessionId = "";
 let historyOpen = false;
 let historyBusy = false;
+let historyQuery = "";
 
 let activeMode: AgentMode = "ask";
 let activeModel = "openai-compatible";
@@ -57,6 +58,7 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       models = message.models;
       messages = message.messages;
       tools = message.tools;
+      contextRefs = [];
       break;
     case "sessionList":
       sessions = message.sessions;
@@ -75,6 +77,10 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       historyBusy = false;
       historyOpen = false;
       runState = "idle";
+      contextRefs = [];
+      break;
+    case "contextAdded":
+      contextRefs = [...contextRefs.filter((ref) => ref.id !== message.ref.id), message.ref];
       break;
     case "modeChanged":
       activeMode = message.mode;
@@ -221,6 +227,13 @@ function wireInteractions(): void {
   document.querySelector<HTMLButtonElement>("[data-action=refresh-sessions]")?.addEventListener("click", () => {
     vscode.postMessage({ type: "listSessions" });
   });
+  document.querySelector<HTMLInputElement>("#session-search")?.addEventListener("input", (event) => {
+    historyQuery = (event.target as HTMLInputElement).value;
+    const query = historyQuery.trim().toLocaleLowerCase();
+    document.querySelectorAll<HTMLElement>("[data-session-search]").forEach((row) => {
+      row.hidden = query.length > 0 && !(row.dataset.sessionSearch ?? "").includes(query);
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-session-id]").forEach((button) => button.addEventListener("click", () => {
     const sessionId = button.dataset.sessionId;
     if (!sessionId || historyBusy) return;
@@ -228,6 +241,15 @@ function wireInteractions(): void {
     historyOpen = false;
     render();
     vscode.postMessage({ type: "openSession", sessionId });
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-session-action]").forEach((button) => button.addEventListener("click", () => {
+    const sessionId = button.dataset.actionSessionId;
+    const action = button.dataset.sessionAction;
+    if (!sessionId || historyBusy) return;
+    if (action === "rename") vscode.postMessage({ type: "renameSession", sessionId });
+    if (action === "duplicate") vscode.postMessage({ type: "duplicateSession", sessionId });
+    if (action === "export") vscode.postMessage({ type: "exportSession", sessionId });
+    if (action === "delete") vscode.postMessage({ type: "deleteSession", sessionId });
   }));
   document.querySelector<HTMLButtonElement>("[data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
   document.querySelector<HTMLButtonElement>("[data-action=approve]")?.addEventListener("click", () => { if (approval) vscode.postMessage({ type: "approveTool", approvalId: approval.id }); });
@@ -254,19 +276,20 @@ function wireInteractions(): void {
     render();
   }));
   document.querySelector<HTMLButtonElement>("[data-action=attach]")?.addEventListener("click", () => {
-    const ref: ContextRef = { id: `context-${Date.now()}`, label: "current selection", kind: "selection" };
-    contextRefs = [...contextRefs, ref];
-    vscode.postMessage({ type: "addContext", ref });
-    render();
+    vscode.postMessage({ type: "pickContext" });
   });
   document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; runState = "idle"; historyOpen = false; vscode.postMessage({ type: "newSession" }); render(); });
 }
 
 function sessionMenu(): string {
   const items = sessions.length
-    ? sessions.map((session) => `<button class="session-item ${session.id === activeSessionId ? "active" : ""}" data-session-id="${escapeHtml(session.id)}" role="menuitem" ${historyBusy ? "disabled" : ""}><span class="session-item-main"><b>${escapeHtml(session.title || "Untitled session")}</b><small>${escapeHtml(session.activeMode)} · ${formatSessionDate(session.updatedAt)}</small></span><span class="session-item-status ${session.status}">${session.id === activeSessionId ? "open" : session.status === "waiting_for_approval" ? "waiting" : ""}</span></button>`).join("")
+    ? sessions.map((session) => {
+      const search = `${session.title} ${session.activeMode} ${session.modelId} ${formatSessionDate(session.updatedAt)}`.toLocaleLowerCase();
+      const hidden = historyQuery.trim() && !search.includes(historyQuery.trim().toLocaleLowerCase()) ? " hidden" : "";
+      return `<div class="session-item ${session.id === activeSessionId ? "active" : ""}" data-session-search="${escapeHtml(search)}"${hidden}><button class="session-item-open" data-session-id="${escapeHtml(session.id)}" role="menuitem" ${historyBusy ? "disabled" : ""}><span class="session-item-main"><b>${escapeHtml(session.title || "Untitled session")}</b><small>${escapeHtml(session.activeMode)} · ${escapeHtml(session.modelId)} · ${formatSessionDate(session.updatedAt)}</small></span><span class="session-item-status ${session.status}">${session.id === activeSessionId ? "open" : session.status === "waiting_for_approval" ? "waiting" : ""}</span></button><div class="session-item-actions" aria-label="Session actions"><button data-session-action="rename" data-action-session-id="${escapeHtml(session.id)}" title="Rename">✎</button><button data-session-action="duplicate" data-action-session-id="${escapeHtml(session.id)}" title="Duplicate">⧉</button><button data-session-action="export" data-action-session-id="${escapeHtml(session.id)}" title="Export">⇩</button><button data-session-action="delete" data-action-session-id="${escapeHtml(session.id)}" title="Delete">×</button></div></div>`;
+    }).join("")
     : `<p class="session-empty">No recent sessions in this workspace.</p>`;
-  return `<div class="session-menu" role="menu" aria-label="Recent workspace sessions"><div class="session-menu-heading"><span>RECENT SESSIONS</span><button data-action="refresh-sessions" aria-label="Refresh recent sessions">↻</button></div>${items}</div>`;
+  return `<div class="session-menu" role="menu" aria-label="Workspace sessions"><div class="session-menu-heading"><span>SESSION HISTORY</span><button data-action="refresh-sessions" aria-label="Refresh sessions">↻</button></div><input id="session-search" class="session-search" type="search" value="${escapeHtml(historyQuery)}" placeholder="Search title, mode, or model…" aria-label="Search sessions">${items}</div>`;
 }
 
 function activeSessionTitle(): string {

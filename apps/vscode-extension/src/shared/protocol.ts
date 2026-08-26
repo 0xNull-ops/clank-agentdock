@@ -23,13 +23,17 @@ export type UiToExtensionMessage =
   | { type: "newSession" }
   | { type: "listSessions" }
   | { type: "openSession"; sessionId: string }
+  | { type: "renameSession"; sessionId: string }
+  | { type: "duplicateSession"; sessionId: string }
+  | { type: "deleteSession"; sessionId: string }
+  | { type: "exportSession"; sessionId: string }
+  | { type: "pickContext" }
   | { type: "changeMode"; mode: AgentMode }
   | { type: "changeModel"; modelId: string }
   | { type: "approveTool"; approvalId: string }
   | { type: "denyTool"; approvalId: string }
   | { type: "openCheckpointDiff"; checkpointId: string; path?: string }
   | { type: "revertCheckpoint"; checkpointId: string }
-  | { type: "addContext"; ref: ContextRef }
   | { type: "removeContext"; refId: string }
   | { type: "openSettings" };
 
@@ -61,6 +65,7 @@ export type ExtensionToUiMessage =
   | { type: "initialize"; sessionId: string; mode: AgentMode; modelId: string; models: ModelOption[]; messages: ChatMessage[]; tools: ToolActivity[]; workspaceName?: string }
   | { type: "sessionList"; sessions: SessionHistoryItem[]; activeSessionId: string }
   | { type: "sessionOpened"; session: SessionHistoryItem; messages: ChatMessage[]; tools: ToolActivity[] }
+  | { type: "contextAdded"; ref: ContextRef }
   | { type: "modeChanged"; mode: AgentMode }
   | { type: "modelChanged"; modelId: string }
   | { type: "modelsChanged"; models: ModelOption[] }

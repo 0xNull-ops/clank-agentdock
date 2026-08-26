@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionStore } from "../src";
+import { MAX_SESSION_TITLE_LENGTH, SessionStore } from "../src";
 import type { AgentSession, ModeTransition, ToolCallRecord } from "@freebuff/agent-core";
 
 let hasSqlJs = true;
@@ -119,6 +119,95 @@ describe("SessionStore", () => {
       expect(exported?.truncated).toBe(true);
       const bytes = await readFile(path);
       expect(bytes.subarray(0, 16).toString()).toBe("SQLite format 3\0");
+    });
+  });
+
+  maybe("renames a session within its workspace and persists the trimmed title", async () => {
+    await withStore(async (store, path) => {
+      await store.createSession(session);
+
+      const renamed = await store.renameSession(session.id, "  A better title  ", { workspaceId: session.workspaceId });
+      expect(renamed).toMatchObject({ id: session.id, workspaceId: session.workspaceId, title: "A better title" });
+      expect(renamed?.updatedAt).toBe(1_000);
+      expect(await store.renameSession(session.id, "wrong workspace", { workspaceId: "another-workspace" })).toBeUndefined();
+      expect(await store.getSession(session.id, { workspaceId: "another-workspace" })).toBeUndefined();
+      expect(await store.getSession(session.id, { workspaceId: session.workspaceId })).toMatchObject({ title: "A better title" });
+
+      await store.close();
+      const reopened = await SessionStore.open({ filePath: path });
+      try {
+        expect((await reopened.getSession(session.id))?.title).toBe("A better title");
+      } finally {
+        await reopened.close();
+      }
+    });
+  });
+
+  maybe("deletes only the scoped session and cascades every related record", async () => {
+    await withStore(async (store) => {
+      await store.createSession(session);
+      await store.appendMessage(session.id, { id: "message-1", role: "user", content: "hello" });
+      await store.appendProviderMessage(session.id, { id: "provider-1", providerId: "fake", modelId: "fake-model", payload: { raw: true } });
+      await store.appendStep({ id: "step-1", sessionId: session.id, sequence: 1, status: "completed", startedAt: 101, endedAt: 102 });
+      await store.recordToolCall({ id: "call-1", sessionId: session.id, stepId: "step-1", toolName: "read_file", rawArguments: "{}", status: "completed" });
+      await store.recordToolResult({ id: "result-1", sessionId: session.id, stepId: "step-1", callId: "call-1", result: { content: "ok" }, createdAt: 103 });
+      await store.recordApproval({ id: "approval-1", sessionId: session.id, callId: "call-1", request: { toolName: "read_file" }, createdAt: 104 });
+      await store.recordModeTransition(session.id, { from: "plan", to: "implement", timestamp: 105, reason: "plan-approved" });
+      await store.recordUsage({ id: "usage-1", sessionId: session.id, stepId: "step-1", inputTokens: 1, outputTokens: 2, createdAt: 106 });
+
+      expect(await store.deleteSession(session.id, { workspaceId: "another-workspace" })).toBe(false);
+      expect(await store.getSession(session.id)).toBeDefined();
+      expect(await store.deleteSession(session.id, { workspaceId: session.workspaceId })).toBe(true);
+      expect(await store.getSession(session.id)).toBeUndefined();
+      expect(await store.openSession(session.id)).toBeUndefined();
+      expect(await store.exportSession(session.id)).toBeUndefined();
+
+      // Reusing every child id is a public-interface proof that the cascades
+      // removed rows from all related tables, not only the session header.
+      await store.createSession({ ...session, title: "Replacement" });
+      await store.appendMessage(session.id, { id: "message-1", role: "user", content: "again" });
+      await store.appendProviderMessage(session.id, { id: "provider-1", providerId: "fake", modelId: "fake-model", payload: { raw: false } });
+      await store.appendStep({ id: "step-1", sessionId: session.id, sequence: 1, status: "completed", startedAt: 201 });
+      await store.recordToolCall({ id: "call-1", sessionId: session.id, stepId: "step-1", toolName: "read_file", rawArguments: "{}", status: "completed" });
+      await store.recordToolResult({ id: "result-1", sessionId: session.id, stepId: "step-1", callId: "call-1", result: { content: "again" }, createdAt: 203 });
+      await store.recordApproval({ id: "approval-1", sessionId: session.id, callId: "call-1", request: { toolName: "read_file" }, createdAt: 204 });
+      await store.recordModeTransition(session.id, { from: "plan", to: "implement", timestamp: 205, reason: "plan-approved" });
+      await store.recordUsage({ id: "usage-1", sessionId: session.id, stepId: "step-1", inputTokens: 1, outputTokens: 2, createdAt: 206 });
+      expect((await store.openSession(session.id))?.messages[0].message.content).toBe("again");
+    });
+  });
+
+  maybe("supports explicit host-only provider export while retaining bounded safe defaults", async () => {
+    await withStore(async (store) => {
+      await store.createSession(session);
+      await store.appendMessage(session.id, {
+        role: "assistant",
+        content: "answer",
+        providerFrames: [{ providerId: "fake", modelId: "fake-model", sequence: 1, payload: { opaque: true } }],
+      });
+      await store.appendProviderMessage(session.id, { providerId: "fake", modelId: "fake-model", payload: { raw: "frame" } });
+
+      const safe = await store.exportSession(session.id);
+      expect(safe?.messages[0].message.providerFrames).toBeUndefined();
+      expect(safe?.providerMessages).toBeUndefined();
+
+      const hostOnly = await store.exportSession(session.id, {
+        includeProviderFrames: true,
+        includeProviderMessages: true,
+        limit: 1,
+      });
+      expect(hostOnly?.messages[0].message.providerFrames).toHaveLength(1);
+      expect(hostOnly?.providerMessages).toHaveLength(1);
+      expect(hostOnly?.truncated).toBe(false);
+      expect(await store.exportSession(session.id, { workspaceId: "another-workspace" })).toBeUndefined();
+    });
+  });
+
+  maybe("rejects empty and overlong session titles", async () => {
+    await withStore(async (store) => {
+      await store.createSession(session);
+      await expect(store.renameSession(session.id, "   ")).rejects.toThrow("non-empty");
+      await expect(store.renameSession(session.id, "x".repeat(MAX_SESSION_TITLE_LENGTH + 1))).rejects.toThrow(String(MAX_SESSION_TITLE_LENGTH));
     });
   });
 });

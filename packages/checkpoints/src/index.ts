@@ -70,6 +70,25 @@ export interface CheckpointStoreOptions {
   excludePaths?: string[];
   /** Secrets are excluded by default; set false only for an explicit, deliberate export. */
   excludeSecrets?: boolean;
+  /** Optional diagnostics hook, primarily useful for fault-injection tests. */
+  restoreHook?: (step: RestoreStep, path: string) => Promise<void> | void;
+}
+
+export type RestoreStep = "before-backup" | "after-backup" | "before-install" | "after-install";
+
+interface RestoreJournalEntry {
+  path: string;
+  backup: "pending" | "moved";
+  installed: boolean;
+}
+
+interface RestoreJournal {
+  version: 1;
+  transactionId: string;
+  workspaceRoot: string;
+  changedPaths: string[];
+  entries: RestoreJournalEntry[];
+  phase: "prepared" | "backing-up" | "installing" | "rolling-back";
 }
 
 export interface CaptureOptions {
@@ -124,6 +143,7 @@ export class CheckpointStore {
 
   /** Capture a durable pre/post state. The mutator runs between two snapshots. */
   public async create(label: string, mutator: () => Promise<void> | void): Promise<CheckpointPair> {
+    await this.recoverPendingRestores();
     const id = randomUUID();
     // Each side gets its own durable snapshot id; the pair id ties them
     // together while keeping the manifests independently loadable.
@@ -139,6 +159,7 @@ export class CheckpointStore {
   }
 
   public async capture(label = "snapshot", options: CaptureOptions & { id?: string } = {}): Promise<Snapshot> {
+    await this.recoverPendingRestores();
     const manifest = await this.scan(options.id ?? randomUUID(), label);
     if (options.ephemeral) return { manifest, storagePath: "" };
     const checkpointPath = join(this.storeRoot, manifest.id);
@@ -165,6 +186,7 @@ export class CheckpointStore {
 
   /** Read a durable snapshot by id, useful when reopening a VS Code session. */
   public async load(id: string): Promise<Snapshot> {
+    await this.recoverPendingRestores();
     assertSafeId(id);
     const storagePath = join(this.storeRoot, id);
     const manifest = JSON.parse(await fs.readFile(join(storagePath, "manifest.json"), "utf8")) as SnapshotManifest;
@@ -197,6 +219,7 @@ export class CheckpointStore {
   }
 
   public async diffWorkspace(snapshot: Snapshot): Promise<DiffSummary> {
+    await this.recoverPendingRestores();
     const current = await this.capture("current workspace", { ephemeral: true });
     return this.summarize(snapshot, current);
   }
@@ -206,6 +229,7 @@ export class CheckpointStore {
    * recorded post-turn state. This protects user edits made after the run.
    */
   public async revert(pair: CheckpointPair): Promise<DiffSummary> {
+    await this.recoverPendingRestores();
     const current = await this.capture("revert guard", { ephemeral: true });
     const drift = compareManifests(pair.after.manifest, current.manifest);
     if (drift.length) throw new CheckpointConflictError(drift);
@@ -221,46 +245,112 @@ export class CheckpointStore {
     const targetMap = new Map(target.manifest.files.map((entry) => [entry.path, entry]));
     const currentMap = new Map(recordedCurrent.manifest.files.map((entry) => [entry.path, entry]));
     const changedPaths = new Set([...targetMap.keys(), ...currentMap.keys()]);
-    const moved: string[] = [];
+    const journal: RestoreJournal = {
+      version: 1,
+      transactionId: basenameForTransaction(transaction),
+      workspaceRoot: this.workspaceRoot,
+      changedPaths: [...changedPaths].sort(),
+      entries: [...changedPaths].sort().map((path) => ({ path, backup: "pending", installed: false })),
+      phase: "prepared",
+    };
     await fs.mkdir(backupRoot, { recursive: true });
     await fs.mkdir(stagedRoot, { recursive: true });
+    await writeJsonAtomic(join(transaction, "journal.json"), journal);
     try {
-      for (const path of changedPaths) {
+      journal.phase = "backing-up";
+      await writeJsonAtomic(join(transaction, "journal.json"), journal);
+      for (const entry of journal.entries) {
+        const path = entry.path;
         const absolute = safeWorkspacePath(this.workspaceRoot, path);
+        await this.options.restoreHook?.("before-backup", path);
+        await assertNoSymlinkPath(this.workspaceRoot, path);
         if (await exists(absolute)) {
           const backup = join(backupRoot, path);
           await fs.mkdir(dirname(backup), { recursive: true });
           await fs.rename(absolute, backup);
-          moved.push(path);
         }
+        entry.backup = "moved";
+        await writeJsonAtomic(join(transaction, "journal.json"), journal);
+        await this.options.restoreHook?.("after-backup", path);
       }
+      journal.phase = "installing";
+      await writeJsonAtomic(join(transaction, "journal.json"), journal);
       for (const [path, entry] of targetMap) {
         const source = entry.blobPath ? join(target.storagePath, entry.blobPath) : "";
         if (!source || !isWithin(target.storagePath, source)) throw new Error(`Invalid checkpoint blob path for ${path}`);
+        await this.options.restoreHook?.("before-install", path);
         const staged = join(stagedRoot, path);
         await fs.mkdir(dirname(staged), { recursive: true });
         await fs.copyFile(source, staged);
-        await fs.mkdir(dirname(safeWorkspacePath(this.workspaceRoot, path)), { recursive: true });
-        await fs.rename(staged, safeWorkspacePath(this.workspaceRoot, path));
-        await fs.chmod(safeWorkspacePath(this.workspaceRoot, path), entry.mode);
+        const destination = safeWorkspacePath(this.workspaceRoot, path);
+        await assertNoSymlinkPath(this.workspaceRoot, path);
+        await fs.mkdir(dirname(destination), { recursive: true });
+        await assertNoSymlinkPath(this.workspaceRoot, path);
+        await fs.rename(staged, destination);
+        await fs.chmod(destination, entry.mode);
+        const journalEntry = journal.entries.find((item) => item.path === path);
+        if (journalEntry) journalEntry.installed = true;
+        await writeJsonAtomic(join(transaction, "journal.json"), journal);
+        await this.options.restoreHook?.("after-install", path);
       }
       await removeIfExists(transaction);
     } catch (error) {
-      // Restore the pre-transaction state as far as possible. Any failure is
-      // surfaced; the backup makes the operation recoverable instead of
-      // leaving a half-written file in place.
-      for (const path of targetMap.keys()) await removeIfExists(safeWorkspacePath(this.workspaceRoot, path));
-      for (const path of moved.reverse()) {
-        const backup = join(backupRoot, path);
-        if (await exists(backup)) {
-          const destination = safeWorkspacePath(this.workspaceRoot, path);
-          await fs.mkdir(dirname(destination), { recursive: true });
-          await fs.rename(backup, destination);
-        }
+      // Roll back immediately when possible. If rollback itself is interrupted,
+      // the durable journal is replayed by the next store operation.
+      try {
+        await this.recoverTransaction(transaction);
+      } catch {
+        // Preserve the original failure; the journal remains for recovery.
       }
-      await removeIfExists(transaction);
       throw error;
     }
+  }
+
+  private async recoverPendingRestores(): Promise<void> {
+    if (!(await exists(this.storeRoot))) return;
+    const entries = await fs.readdir(this.storeRoot, { withFileTypes: true });
+    for (const entry of entries.filter((item) => item.isDirectory() && item.name.startsWith(".restore-")).sort((a, b) => a.name.localeCompare(b.name))) {
+      await this.recoverTransaction(join(this.storeRoot, entry.name));
+    }
+  }
+
+  private async recoverTransaction(transaction: string): Promise<void> {
+    if (!isWithin(this.storeRoot, transaction) || resolve(transaction) === resolve(this.storeRoot)) throw new Error("Invalid restore transaction path");
+    const journalPath = join(transaction, "journal.json");
+    if (!(await exists(journalPath))) {
+      await removeIfExists(transaction);
+      return;
+    }
+    const journal = JSON.parse(await fs.readFile(journalPath, "utf8")) as RestoreJournal;
+    validateRestoreJournal(journal, this.workspaceRoot);
+    const interruptedPhase = journal.phase;
+    journal.phase = "rolling-back";
+    await writeJsonAtomic(journalPath, journal);
+    const backupRoot = join(transaction, "backup");
+    // Remove every path that the transaction could have touched. This also
+    // handles a crash between an install rename and its journal update.
+    for (const path of [...journal.changedPaths].sort((a, b) => b.length - a.length || b.localeCompare(a))) {
+      const item = journal.entries.find((entry) => entry.path === path);
+      const backupExists = await exists(join(backupRoot, path));
+      // During the backup phase, a pending entry whose backup does not exist
+      // was never moved and must remain untouched. Once installation began,
+      // every entry was prepared, so an absent backup means the pre-state was
+      // absent and any workspace file at that path is transaction-owned.
+      if (backupExists || item?.backup === "moved" || interruptedPhase === "installing" || interruptedPhase === "rolling-back") {
+        await assertNoSymlinkPath(this.workspaceRoot, path);
+        await removeWorkspaceFile(safeWorkspacePath(this.workspaceRoot, path));
+      }
+    }
+    for (const path of [...journal.changedPaths].sort()) {
+      const backup = join(backupRoot, path);
+      if (!(await exists(backup))) continue;
+      const destination = safeWorkspacePath(this.workspaceRoot, path);
+      await assertNoSymlinkPath(this.workspaceRoot, path);
+      await fs.mkdir(dirname(destination), { recursive: true });
+      await assertNoSymlinkPath(this.workspaceRoot, path);
+      await fs.rename(backup, destination);
+    }
+    await removeIfExists(transaction);
   }
 
   private async scan(id: string, label: string): Promise<SnapshotManifest> {
@@ -369,13 +459,48 @@ function lcsLength(left: string[], right: string[]): number {
 
 function sha256(value: string | Uint8Array): string { return createHash("sha256").update(value).digest("hex"); }
 function basenameFor(path: string, hash: string): string { return `${sha256(path).slice(0, 16)}-${hash}.blob`; }
+function basenameForTransaction(path: string): string { return path.split(sep).at(-1) ?? path; }
 function assertSafeId(id: string): void { if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid checkpoint id"); }
 function safeWorkspacePath(root: string, path: string): string { const value = resolve(root, path); if (!isWithin(root, value)) throw new Error(`Path escapes workspace: ${path}`); return value; }
 function isWithin(parent: string, child: string): boolean { const rel = relative(resolve(parent), resolve(child)); return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)); }
 async function exists(path: string): Promise<boolean> { try { await fs.lstat(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
 async function removeIfExists(path: string): Promise<void> { await fs.rm(path, { recursive: true, force: true }); }
+async function removeWorkspaceFile(path: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(path);
+    if (stat.isDirectory()) throw new Error(`Refusing to remove directory during checkpoint recovery: ${path}`);
+    await fs.unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+async function assertNoSymlinkPath(root: string, path: string): Promise<void> {
+  safeWorkspacePath(root, path);
+  const segments = path.split(/[\\/]+/).filter(Boolean);
+  let current = resolve(root);
+  for (let index = 0; index < segments.length; index += 1) {
+    current = join(current, segments[index]);
+    try {
+      const stat = await fs.lstat(current);
+      if (stat.isSymbolicLink()) throw new Error(`Refusing checkpoint restore through symlink: ${path}`);
+      if (index < segments.length - 1 && !stat.isDirectory()) throw new Error(`Invalid checkpoint restore parent: ${path}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+  }
+}
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> { const temporary = `${path}.tmp-${randomUUID()}`; await fs.writeFile(temporary, JSON.stringify(value, null, 2), "utf8"); await fs.rename(temporary, path); }
 async function copyFileAtomic(source: string, destination: string, mode: number): Promise<void> { const temporary = `${destination}.tmp-${randomUUID()}`; await fs.copyFile(source, temporary); await fs.chmod(temporary, mode); await fs.rename(temporary, destination); }
 async function readIgnoreFile(path: string): Promise<string[]> { try { return (await fs.readFile(path, "utf8")).split(/\r?\n/); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; } }
 function isBinary(data: Uint8Array): boolean { const limit = Math.min(data.byteLength, 8192); for (let index = 0; index < limit; index += 1) if (data[index] === 0) return true; return false; }
 function validateManifest(manifest: SnapshotManifest, workspaceRoot: string): void { if (resolve(manifest.workspaceRoot) !== resolve(workspaceRoot)) throw new Error("Checkpoint belongs to another workspace"); for (const entry of manifest.files) safeWorkspacePath(workspaceRoot, entry.path); }
+function validateRestoreJournal(journal: RestoreJournal, workspaceRoot: string): void {
+  if (journal.version !== 1 || resolve(journal.workspaceRoot) !== resolve(workspaceRoot)) throw new Error("Invalid checkpoint restore journal");
+  const paths = new Set(journal.changedPaths);
+  if (paths.size !== journal.changedPaths.length || journal.entries.length !== journal.changedPaths.length) throw new Error("Invalid checkpoint restore journal paths");
+  for (const path of journal.changedPaths) safeWorkspacePath(workspaceRoot, path);
+  for (const entry of journal.entries) {
+    if (!paths.has(entry.path) || (entry.backup !== "pending" && entry.backup !== "moved") || typeof entry.installed !== "boolean") throw new Error("Invalid checkpoint restore journal entry");
+  }
+}

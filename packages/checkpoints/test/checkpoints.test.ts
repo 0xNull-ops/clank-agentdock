@@ -100,4 +100,87 @@ describe("CheckpointStore", () => {
       await rm(fixture.store, { recursive: true, force: true });
     }
   });
+
+  test("recovers an interrupted restore journal before the next operation", async () => {
+    const fixture = await workspace();
+    try {
+      const checkpoints = new CheckpointStore({ workspaceRoot: fixture.root, storeRoot: fixture.store });
+      const pair = await checkpoints.create("edit files", () => fs.writeFile(join(fixture.root, "tracked.txt"), "agent edit\n"));
+      const transaction = join(fixture.store, ".restore-interrupted");
+      await fs.mkdir(join(transaction, "backup"), { recursive: true });
+      await fs.rename(join(fixture.root, "tracked.txt"), join(transaction, "backup", "tracked.txt"));
+      await fs.writeFile(join(fixture.root, "tracked.txt"), "partial restore\n");
+      await fs.writeFile(join(transaction, "journal.json"), JSON.stringify({
+        version: 1,
+        transactionId: ".restore-interrupted",
+        workspaceRoot: fixture.root,
+        changedPaths: ["tracked.txt"],
+        entries: [{ path: "tracked.txt", backup: "moved", installed: false }],
+        phase: "installing",
+      }));
+
+      // Any subsequent store operation deterministically finishes the old
+      // transaction before observing the workspace.
+      const reopened = new CheckpointStore({ workspaceRoot: fixture.root, storeRoot: fixture.store });
+      await reopened.capture("after interruption");
+      expect(await fs.readFile(join(fixture.root, "tracked.txt"), "utf8")).toBe("agent edit\n");
+      expect(await fs.stat(transaction).catch(() => undefined)).toBeUndefined();
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(fixture.store, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses a symlink parent introduced during restore and recovers after it is removed", async () => {
+    const fixture = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "checkpoint-outside-"));
+    try {
+      await fs.mkdir(join(fixture.root, "nested"));
+      await fs.writeFile(join(fixture.root, "nested", "tracked.txt"), "before\n");
+      let swapped = false;
+      const checkpoints = new CheckpointStore({
+        workspaceRoot: fixture.root,
+        storeRoot: fixture.store,
+        restoreHook: async (step) => {
+          if (step !== "before-install" || swapped) return;
+          swapped = true;
+          await fs.rm(join(fixture.root, "nested"), { recursive: true });
+          await fs.symlink(outside, join(fixture.root, "nested"));
+        },
+      });
+      const pair = await checkpoints.create("nested edit", () => fs.writeFile(join(fixture.root, "nested", "tracked.txt"), "after\n"));
+      await expect(checkpoints.revert(pair)).rejects.toThrow("symlink");
+      expect(await fs.readFile(join(outside, "tracked.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+
+      await fs.unlink(join(fixture.root, "nested"));
+      await fs.mkdir(join(fixture.root, "nested"));
+      const reopened = new CheckpointStore({ workspaceRoot: fixture.root, storeRoot: fixture.store });
+      await reopened.capture("recover rollback");
+      expect(await fs.readFile(join(fixture.root, "nested", "tracked.txt"), "utf8")).toBe("after\n");
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(fixture.store, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves a recoverable journal and restores the post-state on restore failure", async () => {
+    const fixture = await workspace();
+    try {
+      const checkpoints = new CheckpointStore({
+        workspaceRoot: fixture.root,
+        storeRoot: fixture.store,
+        restoreHook: (step) => {
+          if (step === "after-backup") throw new Error("simulated restore failure");
+        },
+      });
+      const pair = await checkpoints.create("edit files", () => fs.writeFile(join(fixture.root, "tracked.txt"), "agent edit\n"));
+      await expect(checkpoints.revert(pair)).rejects.toThrow("simulated restore failure");
+      expect(await fs.readFile(join(fixture.root, "tracked.txt"), "utf8")).toBe("agent edit\n");
+      expect((await fs.readdir(fixture.store)).filter((name) => name.startsWith(".restore-")).length).toBe(0);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(fixture.store, { recursive: true, force: true });
+    }
+  });
 });

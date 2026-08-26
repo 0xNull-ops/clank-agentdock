@@ -22,7 +22,8 @@
     "onCommand:agentdock.setApiKey",
     "onCommand:agentdock.clearApiKey",
     "onCommand:agentdock.validateProvider",
-    "onCommand:agentdock.refreshModels"
+    "onCommand:agentdock.refreshModels",
+    "onCommand:agentdock.manageProviders"
   ],
   "main": "./dist/extension.js",
   "dependencies": {
@@ -54,6 +55,10 @@
       {
         "command": "agentdock.refreshModels",
         "title": "Agent Harness: Refresh Provider Models"
+      },
+      {
+        "command": "agentdock.manageProviders",
+        "title": "Agent Harness: Manage Providers"
       }
     ],
     "viewsContainers": {
