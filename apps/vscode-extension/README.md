@@ -13,6 +13,7 @@ From this directory, install the package dependencies and run:
 ```sh
 npm run typecheck
 npm run compile
+npm test
 ```
 
 The extension contributes an Agent Harness activity-bar view and the
@@ -37,6 +38,13 @@ provider-independent permission engine. Ask/Plan/Review modes stay read-only;
 write tools will only be advertised once their VS Code adapters and approval
 flows are implemented. An untrusted VS Code workspace continues to support
 read-only chat and blocks mutation-capable tools.
+
+Every runtime turn is bracketed by `CheckpointCoordinator.beginTurn` and
+`completeTurn` (also available as `runWithCheckpoint` for future mutating tool
+adapters). Changed turns produce a checkpoint card with file-level counts and
+native VS Code diff/revert actions. Snapshot content is served through the
+`agentdock-checkpoint:` virtual-document scheme; revert refuses to overwrite
+workspace drift and reports the affected paths in the chat.
 
 ## Runtime seam
 

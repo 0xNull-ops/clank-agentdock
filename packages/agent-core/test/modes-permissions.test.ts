@@ -8,6 +8,21 @@ describe("mode definitions", () => {
     expect(BUILT_IN_MODES.find((item) => item.slug === "debug")?.steps).toBe(50);
   });
 
+  test("advertises only read tools in Ask and workspace mutations in Implement", () => {
+    const ask = BUILT_IN_MODES.find((item) => item.slug === "ask")!;
+    const implement = BUILT_IN_MODES.find((item) => item.slug === "implement")!;
+    expect(ask.tools).toContain("git_*");
+    expect(ask.tools).not.toContain("write_file");
+    expect(ask.tools).not.toContain("edit_file");
+    expect(ask.tools).not.toContain("apply_patch");
+    expect(ask.tools).not.toContain("run_command");
+    expect(implement.tools).toEqual(expect.arrayContaining(["write_file", "edit_file", "apply_patch", "run_command"]));
+    for (const slug of ["plan", "architect", "review", "orchestrate"]) {
+      const readOnlyMode = BUILT_IN_MODES.find((item) => item.slug === slug)!;
+      expect(readOnlyMode.tools).not.toEqual(expect.arrayContaining(["write_file", "edit_file", "apply_patch", "run_command"]));
+    }
+  });
+
   test("parses custom Markdown/YAML modes and keeps body instructions", () => {
     const parsed = parseModeMarkdown(`---
 name: Docs Writer

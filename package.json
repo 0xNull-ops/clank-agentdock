@@ -9,9 +9,11 @@
     "packages/providers/*"
   ],
   "scripts": {
-    "build": "npm --prefix apps/vscode-extension run compile",
-    "typecheck": "npm --prefix apps/vscode-extension run typecheck",
-    "test": "bun test packages/agent-core/test packages/providers/openai-compatible/test",
+    "tokens": "node scripts/build-design-tokens.mjs",
+    "build:packages": "tsc -p packages/agent-core/tsconfig.json && tsc -p packages/providers/openai-compatible/tsconfig.json && tsc -p packages/workspace-tools/tsconfig.json && tsc -p packages/checkpoints/tsconfig.json && tsc -p packages/storage/tsconfig.json",
+    "build": "npm run tokens && npm run build:packages && npm --prefix apps/vscode-extension run compile",
+    "typecheck": "tsc --noEmit -p packages/agent-core/tsconfig.json && tsc --noEmit -p packages/providers/openai-compatible/tsconfig.json && tsc --noEmit -p packages/workspace-tools/tsconfig.json && tsc --noEmit -p packages/checkpoints/tsconfig.json && tsc --noEmit -p packages/storage/tsconfig.json && npm --prefix apps/vscode-extension run typecheck",
+    "test": "bun test packages/agent-core/test packages/providers/openai-compatible/test packages/workspace-tools/test packages/checkpoints/test packages/storage/test apps/vscode-extension/test",
     "check": "npm run test && npm run typecheck && npm run build"
   },
   "engines": {

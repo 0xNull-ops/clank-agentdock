@@ -5,7 +5,9 @@ import type {
   ExtensionToUiMessage,
   ToolActivity,
   ToolApproval,
-  UiToExtensionMessage
+  CheckpointSummaryCard,
+  UiToExtensionMessage,
+  ModelOption
 } from "../shared/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(message: UiToExtensionMessage): void };
@@ -25,7 +27,7 @@ const modes: Array<{ id: AgentMode; label: string; description: string }> = [
   { id: "orchestrate", label: "Orchestrate", description: "Coordinate focused subagents" },
   { id: "custom", label: "Custom", description: "Use a personalized mode definition" }
 ];
-const models = [
+let models: ModelOption[] = [
   { id: "openai-compatible", label: "Configure model…", hint: "OpenAI-compatible endpoint" }
 ];
 
@@ -36,6 +38,8 @@ let contextRefs: ContextRef[] = [];
 let messages: ChatMessage[] = [];
 let tools: ToolActivity[] = [];
 let approval: ToolApproval | undefined;
+let checkpoints: CheckpointSummaryCard[] = [];
+let checkpointConflict: { checkpointId: string; paths: string[]; message: string } | undefined;
 
 render();
 window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) => {
@@ -44,12 +48,17 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
     case "initialize":
       activeMode = message.mode;
       activeModel = message.modelId;
+      models = message.models;
+      messages = message.messages;
       break;
     case "modeChanged":
       activeMode = message.mode;
       break;
     case "modelChanged":
       activeModel = message.modelId;
+      break;
+    case "modelsChanged":
+      models = message.models;
       break;
     case "runState":
       runState = message.state;
@@ -64,6 +73,19 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
     case "approvalRequired":
       approval = message.approval;
       runState = "awaiting_approval";
+      break;
+    case "checkpointSummary":
+      checkpoints = [...checkpoints.filter((checkpoint) => checkpoint.id !== message.checkpoint.id), message.checkpoint];
+      checkpointConflict = undefined;
+      break;
+    case "checkpointReverted":
+      checkpoints = checkpoints.filter((checkpoint) => checkpoint.id !== message.checkpointId);
+      checkpointConflict = undefined;
+      messages = [...messages, { id: `checkpoint-${Date.now()}`, role: "system", text: `Reverted ${message.summary.filesChanged} file${message.summary.filesChanged === 1 ? "" : "s"} from the agent checkpoint.`, createdAt: Date.now() }];
+      break;
+    case "checkpointRevertConflict":
+      checkpointConflict = message;
+      messages = [...messages, { id: `checkpoint-conflict-${Date.now()}`, role: "system", text: `${message.message} Affected paths: ${message.paths.slice(0, 5).join(", ")}${message.paths.length > 5 ? "…" : ""}`, createdAt: Date.now() }];
       break;
     case "error":
       messages = [...messages, { id: `error-${Date.now()}`, role: "system", text: message.message, createdAt: Date.now() }];
@@ -95,7 +117,7 @@ function render(): void {
       <div class="status-row"><span class="status-dot ${runState === "running" ? "pulse" : ""}"></span><span>${statusLabel()}</span><span class="status-spacer"></span><span class="context-label">Context <strong>12%</strong></span><span class="context-track"><span style="width:12%"></span></span></div>
       <div class="rule"></div>
       <section class="transcript" id="transcript" aria-live="polite">
-        ${messages.length === 0 && tools.length === 0 ? emptyState(mode.label) : `${messages.map(messageCard).join("")}${tools.map(toolCard).join("")}${approval ? approvalCard(approval) : ""}`}
+        ${messages.length === 0 && tools.length === 0 && checkpoints.length === 0 ? emptyState(mode.label) : `${messages.map(messageCard).join("")}${tools.map(toolCard).join("")}${checkpoints.map(checkpointCard).join("")}${approval ? approvalCard(approval) : ""}`}
       </section>
       <footer class="composer-wrap">
         ${contextRefs.length ? `<div class="context-chips">${contextRefs.map(contextChip).join("")}</div>` : ""}
@@ -126,6 +148,12 @@ function toolCard(tool: ToolActivity): string {
 
 function approvalCard(item: ToolApproval): string {
   return `<article class="approval-card"><div class="approval-heading"><span class="approval-icon">!</span><div><p class="kicker">PERMISSION REQUEST</p><h3>${escapeHtml(item.toolName)}</h3></div><span class="risk ${item.risk}">${item.risk} risk</span></div><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(item.reason)}</small><div class="approval-actions"><button data-action="deny" class="quiet-button">Deny</button><button data-action="approve" class="approve-button">Approve once</button></div></article>`;
+}
+
+function checkpointCard(item: CheckpointSummaryCard): string {
+  const conflict = checkpointConflict?.checkpointId === item.id ? `<div class="checkpoint-conflict"><b>Revert paused.</b> Workspace edits were detected after this run. Resolve or review the affected files, then try again.<small>${checkpointConflict.paths.slice(0, 4).map(escapeHtml).join(" · ")}${checkpointConflict.paths.length > 4 ? " · …" : ""}</small></div>` : "";
+  const files = item.files.slice(0, 12).map((file) => `<li><button data-checkpoint-path="${escapeHtml(file.path)}" data-checkpoint-id="${escapeHtml(item.id)}" title="Open ${escapeHtml(file.path)} in native diff"><span class="diff-status ${file.status}">${file.status === "added" ? "+" : file.status === "removed" ? "−" : "~"}</span><code>${escapeHtml(file.path)}</code><small>${file.binary ? "binary" : `+${file.linesAdded} −${file.linesRemoved}`}</small></button></li>`).join("");
+  return `<article class="checkpoint-card"><div class="checkpoint-heading"><span class="checkpoint-icon">↔</span><div><p class="kicker">CHECKPOINT</p><h3>${escapeHtml(item.label)}</h3></div><span class="checkpoint-count">${item.filesChanged} file${item.filesChanged === 1 ? "" : "s"}</span></div><div class="checkpoint-stats"><strong>+${item.additions}</strong><span>−${item.removals}</span><span class="checkpoint-spacer"></span><small>${new Date(item.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div><ul class="checkpoint-files">${files}${item.files.length > 12 ? `<li class="checkpoint-more">+ ${item.files.length - 12} more files</li>` : ""}</ul>${conflict}<div class="checkpoint-actions"><button class="quiet-button" data-action="checkpoint-diff" data-checkpoint-id="${escapeHtml(item.id)}">View Diff</button><button class="approve-button checkpoint-revert" data-action="checkpoint-revert" data-checkpoint-id="${escapeHtml(item.id)}">Revert</button></div></article>`;
 }
 
 function contextChip(ref: ContextRef): string {
@@ -165,6 +193,20 @@ function wireInteractions(): void {
   document.querySelector<HTMLButtonElement>("[data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
   document.querySelector<HTMLButtonElement>("[data-action=approve]")?.addEventListener("click", () => { if (approval) vscode.postMessage({ type: "approveTool", approvalId: approval.id }); });
   document.querySelector<HTMLButtonElement>("[data-action=deny]")?.addEventListener("click", () => { if (approval) vscode.postMessage({ type: "denyTool", approvalId: approval.id }); });
+  document.querySelectorAll<HTMLButtonElement>("[data-action=checkpoint-diff]").forEach((button) => button.addEventListener("click", () => {
+    const checkpointId = button.dataset.checkpointId;
+    if (checkpointId) vscode.postMessage({ type: "openCheckpointDiff", checkpointId });
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-action=checkpoint-revert]").forEach((button) => button.addEventListener("click", () => {
+    const checkpointId = button.dataset.checkpointId;
+    if (!checkpointId || !window.confirm("Revert this agent checkpoint? Revert is guarded and will stop if the workspace changed.")) return;
+    vscode.postMessage({ type: "revertCheckpoint", checkpointId });
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-checkpoint-path]").forEach((button) => button.addEventListener("click", () => {
+    const checkpointId = button.dataset.checkpointId;
+    const path = button.dataset.checkpointPath;
+    if (checkpointId && path) vscode.postMessage({ type: "openCheckpointDiff", checkpointId, path });
+  }));
   document.querySelectorAll<HTMLButtonElement>("[data-remove-context]").forEach((button) => button.addEventListener("click", () => {
     const refId = button.dataset.removeContext;
     if (!refId) return;
@@ -178,7 +220,7 @@ function wireInteractions(): void {
     vscode.postMessage({ type: "addContext", ref });
     render();
   });
-  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; approval = undefined; runState = "idle"; vscode.postMessage({ type: "newSession" }); render(); });
+  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; runState = "idle"; vscode.postMessage({ type: "newSession" }); render(); });
 }
 
 function appendStreamingText(text: string): void {

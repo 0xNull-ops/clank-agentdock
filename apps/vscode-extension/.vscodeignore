@@ -8,3 +8,7 @@ node_modules/**
 # dependencies when creating a VSIX (the development install links them).
 !node_modules/@freebuff/
 !node_modules/@freebuff/**
+!node_modules/sql.js/
+!node_modules/sql.js/dist/
+!node_modules/sql.js/dist/sql-wasm.js
+!node_modules/sql.js/dist/sql-wasm.wasm

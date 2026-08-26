@@ -1,22 +1,34 @@
 import * as vscode from "vscode";
+import type { NormalizedMessage } from "@freebuff/agent-core";
 import {
   type AgentMode,
   type ExtensionToUiMessage,
   type UiToExtensionMessage,
   type ContextRef,
+  type ChatMessage,
   MODEL_OPTIONS
 } from "./shared/protocol";
 import { AgentRuntimeBridge } from "./runtime/bridge";
+import { SessionPersistenceCoordinator, type RestoredSession } from "./runtime/session-persistence";
+import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
 
 const VIEW_ID = "agentdock.agentView";
 const API_KEY_SECRET = "agentdock.provider.apiKey";
 
-export function activate(context: vscode.ExtensionContext): void {
-  const provider = new AgentViewProvider(context);
+let sessionPersistence: SessionPersistenceCoordinator | undefined;
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  sessionPersistence = await SessionPersistenceCoordinator.open(context);
+  const recent = (await sessionPersistence.list({ limit: 1 }))[0];
+  const restored = recent ? await sessionPersistence.restore(recent.id) : undefined;
+  const replayMessages = recent ? await sessionPersistence.replayMessages(recent.id) : undefined;
+  const provider = new AgentViewProvider(context, sessionPersistence, restored, replayMessages);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true }
     }),
+    vscode.workspace.registerTextDocumentContentProvider(CHECKPOINT_DOCUMENT_SCHEME, provider.checkpointDocumentProvider()),
+    provider.checkpointDocumentProvider(),
     vscode.commands.registerCommand("agentdock.open", async () => {
       await vscode.commands.executeCommand("workbench.view.extension.agentdock");
     }),
@@ -51,27 +63,50 @@ export function activate(context: vscode.ExtensionContext): void {
       } catch (error) {
         void vscode.window.showErrorMessage(`Agent Harness provider is unreachable: ${error instanceof Error ? error.message : String(error)}`);
       }
-    })
+    }),
+    vscode.commands.registerCommand("agentdock.refreshModels", async () => {
+      await provider.refreshModels(true);
+    }),
+    { dispose: () => { void sessionPersistence?.close(); } }
   );
 }
 
-export function deactivate(): void {
-  // The agent bridge owns cancellation. Keeping deactivation side-effect free
-  // lets VS Code tear down a run without leaving child processes behind.
+export async function deactivate(): Promise<void> {
+  await sessionPersistence?.close();
+  sessionPersistence = undefined;
 }
 
 class AgentViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
-  private readonly sessionId = `session-${Date.now().toString(36)}`;
+  private sessionId: string;
   private mode: AgentMode;
   private modelId: string;
   private readonly runtime: AgentRuntimeBridge;
+  private restoredMessages: ChatMessage[];
+  private newSessionPending?: Promise<void>;
 
-  public constructor(private readonly context: vscode.ExtensionContext) {
+  public constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly persistence: SessionPersistenceCoordinator,
+    restored?: RestoredSession,
+    replayMessages?: NormalizedMessage[],
+  ) {
     const config = vscode.workspace.getConfiguration("agentdock");
-    this.mode = normalizeMode(config.get<string>("defaultMode", "ask"));
-    this.modelId = config.get<string>("provider.model", "").trim() || config.get<string>("defaultModel", MODEL_OPTIONS[0].id);
-    this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) });
+    this.mode = restored ? normalizeMode(restored.session.activeMode) : normalizeMode(config.get<string>("defaultMode", "ask"));
+    this.modelId = restored?.session.modelId
+      ?? (config.get<string>("provider.model", "").trim() || config.get<string>("defaultModel", MODEL_OPTIONS[0].id));
+    this.sessionId = restored?.session.id ?? `session-${Date.now().toString(36)}`;
+    this.restoredMessages = restored?.messages.flatMap(toChatMessage) ?? [];
+    this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence);
+    if (restored) this.runtime.restoreHistory(restored.session.id, replayMessages ?? restored.messages);
+  }
+
+  public async refreshModels(notifyUser = true): Promise<void> {
+    await this.runtime.refreshModels(notifyUser);
+  }
+
+  public checkpointDocumentProvider(): vscode.TextDocumentContentProvider & vscode.Disposable {
+    return this.runtime.checkpointDocumentProvider();
   }
 
   public resolveWebviewView(view: vscode.WebviewView): void {
@@ -81,14 +116,14 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "dist")]
     };
     view.webview.html = this.renderHtml(view.webview);
-    view.webview.onDidReceiveMessage((message: unknown) => this.handleMessage(message));
+    view.webview.onDidReceiveMessage((message: unknown) => { void this.handleMessage(message); });
     view.onDidDispose(() => {
       this.runtime.cancel(this.sessionId);
       if (this.view === view) this.view = undefined;
     });
   }
 
-  private handleMessage(message: unknown): void {
+  private async handleMessage(message: unknown): Promise<void> {
     if (!isUiToExtensionMessage(message)) return;
     switch (message.type) {
       case "ready":
@@ -97,31 +132,45 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           sessionId: this.sessionId,
           mode: this.mode,
           modelId: this.modelId,
+          models: this.runtime.cachedModelOptions(this.modelId),
+          messages: this.restoredMessages,
           workspaceName: vscode.workspace.name
         });
+        void this.runtime.restoreRecentCheckpointCards();
+        void this.runtime.refreshModels(false);
         return;
       case "changeMode":
         this.mode = message.mode;
         this.post({ type: "modeChanged", mode: this.mode });
+        void this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode });
         return;
       case "changeModel":
         this.modelId = message.modelId;
         this.post({ type: "modelChanged", modelId: this.modelId });
+        void this.persistence.updateSessionSelection(this.sessionId, { modelId: this.modelId });
         return;
       case "sendMessage":
+        await this.newSessionPending;
         void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context: message.context });
         return;
       case "cancelRun":
         this.runtime.cancel(this.sessionId);
         return;
       case "newSession":
-        this.runtime.reset(this.sessionId);
+        this.newSessionPending ??= this.startNewSession().finally(() => { this.newSessionPending = undefined; });
+        await this.newSessionPending;
         return;
       case "approveTool":
-        this.runtime.approve(message.approvalId, "allow");
+        void this.runtime.approve(message.approvalId, "allow");
         return;
       case "denyTool":
-        this.runtime.approve(message.approvalId, "deny");
+        void this.runtime.approve(message.approvalId, "deny");
+        return;
+      case "openCheckpointDiff":
+        void this.runtime.openCheckpointDiff(message.checkpointId, message.path);
+        return;
+      case "revertCheckpoint":
+        void this.runtime.revertCheckpoint(message.checkpointId);
         return;
       case "addContext":
       case "removeContext":
@@ -131,6 +180,23 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         }
         return;
     }
+  }
+
+  private async startNewSession(): Promise<void> {
+    const previousSessionId = this.sessionId;
+    this.runtime.reset(previousSessionId);
+    const session = await this.persistence.newSession({ activeMode: this.mode, modelId: this.modelId });
+    this.sessionId = session.id;
+    this.restoredMessages = [];
+    this.post({
+      type: "initialize",
+      sessionId: this.sessionId,
+      mode: this.mode,
+      modelId: this.modelId,
+      models: this.runtime.cachedModelOptions(this.modelId),
+      messages: [],
+      workspaceName: vscode.workspace.name,
+    });
   }
 
   private post(message: ExtensionToUiMessage): void {
@@ -189,6 +255,13 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
     case "approveTool":
     case "denyTool":
       return typeof message.approvalId === "string" && message.approvalId.length <= 256;
+    case "openCheckpointDiff":
+      return typeof message.checkpointId === "string"
+        && message.checkpointId.length > 0
+        && message.checkpointId.length <= 256
+        && (message.path === undefined || (typeof message.path === "string" && message.path.length <= 4_096));
+    case "revertCheckpoint":
+      return typeof message.checkpointId === "string" && message.checkpointId.length > 0 && message.checkpointId.length <= 256;
     case "removeContext":
       return typeof message.refId === "string" && message.refId.length <= 256;
     case "addContext":
@@ -219,4 +292,10 @@ function isContextRef(value: unknown): value is ContextRef {
     && ref.label.length <= 512
     && ["file", "selection", "folder", "diagnostics"].includes(String(ref.kind))
     && (ref.uri === undefined || (typeof ref.uri === "string" && ref.uri.length <= 4_096));
+}
+
+function toChatMessage(message: NormalizedMessage, index: number): ChatMessage[] {
+  if (message.role !== "user" && message.role !== "assistant") return [];
+  if (typeof message.content !== "string" || !message.content) return [];
+  return [{ id: `restored-${index}`, role: message.role, text: message.content, createdAt: 0 }];
 }

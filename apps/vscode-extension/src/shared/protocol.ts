@@ -25,6 +25,8 @@ export type UiToExtensionMessage =
   | { type: "changeModel"; modelId: string }
   | { type: "approveTool"; approvalId: string }
   | { type: "denyTool"; approvalId: string }
+  | { type: "openCheckpointDiff"; checkpointId: string; path?: string }
+  | { type: "revertCheckpoint"; checkpointId: string }
   | { type: "addContext"; ref: ContextRef }
   | { type: "removeContext"; refId: string }
   | { type: "openSettings" };
@@ -36,15 +38,25 @@ export interface ContextRef {
   uri?: string;
 }
 
+export interface ModelOption {
+  id: string;
+  label: string;
+  hint: string;
+}
+
 export type ExtensionToUiMessage =
-  | { type: "initialize"; sessionId: string; mode: AgentMode; modelId: string; workspaceName?: string }
+  | { type: "initialize"; sessionId: string; mode: AgentMode; modelId: string; models: ModelOption[]; messages: ChatMessage[]; workspaceName?: string }
   | { type: "modeChanged"; mode: AgentMode }
   | { type: "modelChanged"; modelId: string }
+  | { type: "modelsChanged"; models: ModelOption[] }
   | { type: "runState"; state: RunState; runId?: string }
   | { type: "textDelta"; runId: string; text: string }
   | { type: "assistantMessage"; message: ChatMessage }
   | { type: "toolCall"; tool: ToolActivity }
   | { type: "approvalRequired"; approval: ToolApproval }
+  | { type: "checkpointSummary"; checkpoint: CheckpointSummaryCard }
+  | { type: "checkpointReverted"; checkpointId: string; summary: CheckpointSummaryCard }
+  | { type: "checkpointRevertConflict"; checkpointId: string; paths: string[]; message: string }
   | { type: "usageUpdated"; usage: UsageSnapshot }
   | { type: "error"; message: string; kind: "provider" | "tool" | "permission" | "workspace" | "unknown" };
 
@@ -77,6 +89,24 @@ export interface UsageSnapshot {
   reservedOutputTokens: number;
 }
 
+export interface CheckpointSummaryFile {
+  path: string;
+  status: "added" | "removed" | "modified";
+  binary: boolean;
+  linesAdded: number;
+  linesRemoved: number;
+}
+
+export interface CheckpointSummaryCard {
+  id: string;
+  label: string;
+  createdAt: number;
+  filesChanged: number;
+  additions: number;
+  removals: number;
+  files: CheckpointSummaryFile[];
+}
+
 export const BUILT_IN_MODES: ReadonlyArray<{ id: AgentMode; label: string; description: string }> = [
   { id: "ask", label: "Ask", description: "Understand and explain without editing" },
   { id: "plan", label: "Plan", description: "Explore and shape an implementation plan" },
@@ -88,6 +118,6 @@ export const BUILT_IN_MODES: ReadonlyArray<{ id: AgentMode; label: string; descr
   { id: "custom", label: "Custom", description: "Use a personalized mode definition" }
 ];
 
-export const MODEL_OPTIONS = [
+export const MODEL_OPTIONS: ReadonlyArray<ModelOption> = [
   { id: "openai-compatible", label: "Configure model…", hint: "OpenAI-compatible endpoint" }
-] as const;
+];

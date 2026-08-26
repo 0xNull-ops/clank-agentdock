@@ -91,6 +91,8 @@ export async function runAgent(options: AgentLoopOptions): Promise<AgentRunResul
     emit({ type: "model_override_rejected", sessionId: session.id, requestedModel: options.model, activeModel: model, reason: `Mode ${mode.name} requires the fixed model ${model}.` });
   }
 
+  emit({ type: "session_started", session: { ...session, status: "running", updatedAt: Date.now() } });
+
   let capabilities;
   try {
     capabilities = await provider.capabilities(model);
@@ -294,6 +296,13 @@ export async function runAgent(options: AgentLoopOptions): Promise<AgentRunResul
         }
         if (approvalResult.value !== "allow") {
           const result = errorResult("User denied this tool call.", "PERMISSION_DENIED");
+          messages.push({ role: "tool", toolCallId: call.id, content: result.content });
+          emit({ type: "tool_completed", call: { ...permittedRecord, status: "denied", endedAt: Date.now() }, result });
+          continue;
+        }
+        const revalidated = effectivePermissionEngine.evaluate(permissionRequest);
+        if (revalidated.effect === "deny") {
+          const result = errorResult(revalidated.reason ?? "Permission changed while approval was pending.", "PERMISSION_REVOKED");
           messages.push({ role: "tool", toolCallId: call.id, content: result.content });
           emit({ type: "tool_completed", call: { ...permittedRecord, status: "denied", endedAt: Date.now() }, result });
           continue;

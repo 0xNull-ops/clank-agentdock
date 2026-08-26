@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "skipLibCheck": true,
+    "noEmitOnError": true,
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "@freebuff/agent-core": ["../agent-core/dist/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"]
+}

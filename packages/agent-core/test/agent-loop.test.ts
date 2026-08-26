@@ -24,6 +24,20 @@ const readTool: AgentTool = {
 };
 
 describe("agent loop", () => {
+  test("emits the durable session boundary before step events", async () => {
+    const events: string[] = [];
+    await runAgent({
+      session,
+      provider: scriptedProvider([[{ type: "message_end", finishReason: "stop" }]]),
+      mode: implement,
+      initialMessages: [{ role: "user", content: "hello" }],
+      onEvent: (event) => events.push(event.type),
+    });
+    expect(events[0]).toBe("session_started");
+    expect(events).toContain("step_started");
+    expect(events.at(-1)).toBe("session_completed");
+  });
+
   test("executes fragmented tool calls then sends tool result to the next step", async () => {
     const provider = scriptedProvider([
       [
@@ -62,6 +76,26 @@ describe("agent loop", () => {
     const provider = scriptedProvider([[{ type: "tool_call_start", id: "write", name: "write_file" }, { type: "tool_call_delta", id: "write", argumentsDelta: '{"path":"src/a.ts"}' }, { type: "message_end", finishReason: "tool_calls" }]]);
     const result = await runAgent({ session, provider, mode: implement, tools: [{ ...readTool, name: "write_file" }], initialMessages: [{ role: "user", content: "write" }] });
     expect(result.status).toBe("waiting_for_approval");
+  });
+
+  test("revalidates permission after approval before executing", async () => {
+    let revoked = false;
+    let executions = 0;
+    const provider = scriptedProvider([
+      [{ type: "tool_call_start", id: "write", name: "write_file" }, { type: "tool_call_delta", id: "write", argumentsDelta: '{"path":"src/a.ts"}' }, { type: "message_end", finishReason: "tool_calls" }],
+      [{ type: "message_end", finishReason: "stop" }],
+    ]);
+    const result = await runAgent({
+      session,
+      provider,
+      mode: implement,
+      tools: [{ ...readTool, name: "write_file", async execute() { executions += 1; return "written"; } }],
+      initialMessages: [{ role: "user", content: "write" }],
+      permissionEngine: { evaluate: () => ({ effect: revoked ? "deny" : "ask", source: "mode" }) },
+      approve: async () => { revoked = true; return "allow"; },
+    });
+    expect(executions).toBe(0);
+    expect(result.messages.some((message) => message.role === "tool" && message.content.includes("PERMISSION_REVOKED"))).toBe(true);
   });
 
   test("gates tools and unsupported reasoning by provider capabilities", async () => {

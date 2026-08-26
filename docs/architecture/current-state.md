@@ -36,12 +36,18 @@ Implemented in this milestone:
 - provider-independent agent loop and approval boundary
 - VS Code sidebar shell, mode/model controls, streaming messages, and tool/approval cards
 - initial workspace read tools and SecretStorage-backed provider configuration
+- durable before/after checkpoints, persisted recent checkpoint descriptors,
+  native virtual-document diffs, and guarded revert actions
+- durable SQLite sessions, crash recovery, provider replay state, and restored UI transcripts
+- guarded workspace reads/search, atomic write/edit/patch tools, bounded shell execution,
+  command classification, and dedicated Git read tools
+- generated Forge CSS variables with VS Code dark, light, and high-contrast mappings
 
 Deliberately deferred until the vertical slice is hardened:
 
-- durable SQLite sessions and crash recovery
-- atomic edit tools, diffs, and checkpoint/revert
-- shell execution and command classification
+- session-history browsing and transcript management UI
+- delete/move tools and a stronger command/network sandbox
+- crash-atomic multi-file patch and checkpoint restore journals
 - plan approval artifacts
 - custom-mode editor and full YAML validation
 - subagents, worktrees, MCP, semantic search, and workflow presets
