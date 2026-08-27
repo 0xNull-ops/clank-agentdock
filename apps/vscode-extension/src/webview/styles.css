@@ -374,6 +374,14 @@ h1 { margin: 1px 0 0; font-size: 13.5px; line-height: 1.2; font-weight: 600; let
 .setting-select, .setting-input { width: 100%; max-width: 280px; height: 28px; padding: 0 8px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); outline: 0; color: var(--forge-text); background: var(--forge-input); font-size: 11px; }
 .setting-select:focus, .setting-input:focus { border-color: var(--forge-border-strong); }
 
+.theme-switcher-grid { display: flex; gap: 8px; margin-top: 6px; }
+.theme-option-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 10px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); background: var(--forge-input); color: var(--forge-text-secondary); font-size: 11px; font-weight: 500; cursor: pointer; transition: all .15s ease; }
+.theme-option-btn:hover { border-color: var(--forge-border-strong); color: var(--forge-text); background: var(--forge-hover); }
+.theme-option-btn.active { border-color: var(--forge-border-strong); background: var(--forge-surface); color: var(--forge-text); font-weight: 600; }
+.theme-preview { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); }
+.theme-preview.charcoal { background: #09090b; }
+.theme-preview.beige { background: #f7f5f0; border-color: rgba(0,0,0,0.25); }
+
 .startup-failure { display: grid; place-items: center; min-height: 100vh; padding: 32px 24px; text-align: center; }
 .startup-failure .startup-failure-icon { display: grid; place-items: center; width: 42px; height: 42px; margin: 0 auto 12px; border: 1px solid rgba(248,113,113,.3); border-radius: 10px; color: var(--forge-red); background: rgba(248,113,113,.08); font-size: 18px; font-weight: 700; }
 .startup-failure h2 { margin: 6px 0; font-size: 16px; letter-spacing: -.02em; }
@@ -383,3 +391,164 @@ h1 { margin: 1px 0 0; font-size: 13.5px; line-height: 1.2; font-weight: 600; let
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes pulse { 0%, 100% { opacity: .4; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.1); } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* =========================================================================
+   WARM BEIGE THEME (Light Minimalist Paper & Linen)
+   ========================================================================= */
+:root[data-theme="beige"],
+[data-theme="beige"] {
+  --forge-canvas: #f7f5f0;
+  --forge-surface: #ffffff;
+  --forge-raised: #ece8df;
+  --forge-hover: rgba(60, 50, 40, 0.05);
+  --forge-selected: rgba(60, 50, 40, 0.08);
+  --forge-input: #fdfcfb;
+  --forge-border: rgba(60, 50, 40, 0.12);
+  --forge-border-strong: rgba(60, 50, 40, 0.24);
+  --forge-text: #1c1917;
+  --forge-text-secondary: #57534e;
+  --forge-text-tertiary: #78716c;
+  --forge-muted: #a8a29e;
+  --forge-cyan: #292524;
+  --forge-cyan-bright: #0c0a09;
+  --forge-cyan-dim: #78716c;
+  --forge-violet: #57534e;
+  --forge-green: #15803d;
+  --forge-amber: #b45309;
+  --forge-red: #b91c1c;
+  --forge-on-accent: #f7f5f0;
+}
+
+[data-theme="beige"] body {
+  background: var(--forge-canvas);
+  color: var(--forge-text);
+}
+
+[data-theme="beige"] .shell {
+  background: var(--forge-canvas);
+}
+
+[data-theme="beige"] .header,
+[data-theme="beige"] .settings-header {
+  background: var(--forge-canvas);
+  border-color: var(--forge-border);
+}
+
+[data-theme="beige"] .brand-mark {
+  background: #ffffff;
+  border-color: var(--forge-border);
+  color: #1c1917;
+}
+
+[data-theme="beige"] .brand-mark svg path[stroke="#ffffff"] {
+  stroke: #1c1917;
+}
+
+[data-theme="beige"] .brand-mark svg path[stroke="#a1a1aa"] {
+  stroke: #78716c;
+}
+
+[data-theme="beige"] .clank-orb-svg circle {
+  fill: #ffffff;
+  stroke: var(--forge-border);
+}
+
+[data-theme="beige"] .clank-orb-svg path[stroke="#ffffff"] {
+  stroke: #1c1917;
+}
+
+[data-theme="beige"] .clank-orb-svg path[stroke="#71717a"] {
+  stroke: #a8a29e;
+}
+
+[data-theme="beige"] .settings-action-btn.primary,
+[data-theme="beige"] .card-btn.primary,
+[data-theme="beige"] .send-button {
+  background: #1c1917;
+  color: #f7f5f0;
+  border-color: #1c1917;
+}
+
+[data-theme="beige"] .settings-action-btn.primary:hover,
+[data-theme="beige"] .card-btn.primary:hover,
+[data-theme="beige"] .send-button:hover {
+  background: #292524;
+  color: #ffffff;
+  border-color: #292524;
+}
+
+[data-theme="beige"] .settings-card,
+[data-theme="beige"] .vibeproxy-quick-setup-card,
+[data-theme="beige"] .freebuff-quick-setup-card,
+[data-theme="beige"] .aihubmix-quick-setup-card,
+[data-theme="beige"] .general-setting-item {
+  background: #ffffff;
+  border-color: var(--forge-border);
+  box-shadow: 0 1px 3px rgba(60, 50, 40, 0.04);
+}
+
+[data-theme="beige"] .settings-card.active-profile {
+  background: #ffffff;
+  border-color: var(--forge-border-strong);
+  box-shadow: 0 2px 6px rgba(60, 50, 40, 0.08);
+}
+
+[data-theme="beige"] .composer {
+  background: #ffffff;
+  border-color: var(--forge-border-strong);
+  box-shadow: 0 4px 16px rgba(60, 50, 40, 0.06);
+}
+
+[data-theme="beige"] .message.user {
+  background: #ede9df;
+  border-color: var(--forge-border);
+}
+
+[data-theme="beige"] .message.assistant {
+  background: #ffffff;
+  border-color: var(--forge-border);
+  box-shadow: 0 1px 4px rgba(60, 50, 40, 0.03);
+}
+
+[data-theme="beige"] .tool-card {
+  background: #faf8f5;
+  border-color: var(--forge-border);
+}
+
+[data-theme="beige"] .tool-card-header {
+  background: #f3efe6;
+}
+
+[data-theme="beige"] .session-picker,
+[data-theme="beige"] .new-session-header-btn,
+[data-theme="beige"] .select-wrap {
+  background: #ffffff;
+  border-color: var(--forge-border);
+}
+
+[data-theme="beige"] .starter {
+  background: #ffffff;
+  border-color: var(--forge-border);
+  box-shadow: 0 1px 2px rgba(60, 50, 40, 0.04);
+}
+
+[data-theme="beige"] .starter:hover {
+  background: #faf8f5;
+  border-color: var(--forge-border-strong);
+}
+
+[data-theme="beige"] .profile-active-tag,
+[data-theme="beige"] .sidecar-status-pill.running {
+  color: #15803d;
+  background: rgba(22, 128, 61, 0.08);
+  border-color: rgba(22, 128, 61, 0.2);
+}
+
+[data-theme="beige"] .settings-tab.active {
+  color: #1c1917;
+  border-bottom-color: #1c1917;
+}
+
+[data-theme="beige"] .highlight-blue {
+  color: #1c1917;
+}

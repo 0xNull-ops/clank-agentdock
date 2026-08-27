@@ -294,6 +294,52 @@ function render(): void {
   renderChat();
 }
 
+let currentTheme: "charcoal" | "beige" = (() => {
+  try {
+    if (typeof localStorage !== "undefined") {
+      return (localStorage.getItem("clank-theme") as "charcoal" | "beige") || "charcoal";
+    }
+  } catch {}
+  return "charcoal";
+})();
+
+function applyTheme(theme: "charcoal" | "beige"): void {
+  currentTheme = theme;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("clank-theme", theme);
+    }
+  } catch {}
+  try {
+    if (typeof document !== "undefined" && document.documentElement && typeof document.documentElement.setAttribute === "function") {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
+  } catch {}
+}
+
+// Initial theme apply
+applyTheme(currentTheme);
+
+function moonIconSvg(size = 15): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+  </svg>`;
+}
+
+function sunIconSvg(size = 15): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="5"></circle>
+    <line x1="12" y1="1" x2="12" y2="3"></line>
+    <line x1="12" y1="21" x2="12" y2="23"></line>
+    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+    <line x1="1" y1="12" x2="3" y2="12"></line>
+    <line x1="21" y1="12" x2="23" y2="12"></line>
+    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+  </svg>`;
+}
+
 function clankLogoSvg(size = 20): string {
   return `<svg width="${size}" height="${size}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M46 28 L24 50 L46 72" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -384,6 +430,7 @@ function renderChat(): void {
               <span class="session-picker-label" id="session-picker-label">${escapeHtml(activeSessionTitle())}</span>
               <span class="session-picker-chevron">⌄</span>
             </button>
+            <button class="icon-button theme-toggle-btn" data-action="toggle-theme" aria-label="Toggle theme" title="${currentTheme === "beige" ? "Switch to Charcoal (Dark)" : "Switch to Warm Beige (Light)"}">${currentTheme === "beige" ? sunIconSvg(15) : moonIconSvg(15)}</button>
             <button class="icon-button" data-action="open-settings" aria-label="Open Clank settings" title="Clank Settings">${gearIconSvg(16)}</button>
           </div>
         </header>
@@ -969,6 +1016,7 @@ function renderSettings(): void {
           </div>
         </div>
         <div class="header-actions">
+          <button class="icon-button theme-toggle-btn" data-action="toggle-theme" aria-label="Toggle theme" title="${currentTheme === "beige" ? "Switch to Charcoal (Dark)" : "Switch to Warm Beige (Light)"}">${currentTheme === "beige" ? sunIconSvg(15) : moonIconSvg(15)}</button>
           <button class="icon-button" data-action="back-to-chat" title="Close settings (Esc)">✕</button>
         </div>
       </header>
@@ -1437,6 +1485,21 @@ function renderGeneralTab(): string {
   return `
     <div class="general-settings">
       <div class="general-setting-item">
+        <label>Theme Appearance</label>
+        <p class="setting-help">Choose between minimalist Charcoal (Dark) and Warm Beige (Light) paper aesthetic.</p>
+        <div class="theme-switcher-grid">
+          <button type="button" class="theme-option-btn ${currentTheme === "charcoal" ? "active" : ""}" data-theme-choice="charcoal">
+            <span class="theme-preview charcoal"></span>
+            <span>Charcoal (Dark)</span>
+          </button>
+          <button type="button" class="theme-option-btn ${currentTheme === "beige" ? "active" : ""}" data-theme-choice="beige">
+            <span class="theme-preview beige"></span>
+            <span>Warm Beige (Light)</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="general-setting-item">
         <label for="settings-default-mode">Default Startup Mode</label>
         <p class="setting-help">The default role and permissions assigned to new agent sessions.</p>
         <select id="settings-default-mode" class="setting-select">
@@ -1786,6 +1849,10 @@ function wireChatInteractions(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-prompt]").forEach((button) => button.addEventListener("click", () => {
     const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
     if (input) { input.value = button.dataset.prompt ?? ""; input.focus(); }
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-action=toggle-theme]").forEach((btn) => btn.addEventListener("click", () => {
+    applyTheme(currentTheme === "beige" ? "charcoal" : "beige");
+    render();
   }));
   document.querySelector<HTMLButtonElement>("[data-action=open-settings]")?.addEventListener("click", () => {
     currentView = "settings";
@@ -2176,6 +2243,19 @@ function wireSettingsInteractions(): void {
   document.querySelector<HTMLButtonElement>("[data-action=open-advanced-settings]")?.addEventListener("click", () => {
     vscode.postMessage({ type: "openAdvancedSettings" });
   });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=toggle-theme]").forEach((btn) => btn.addEventListener("click", () => {
+    applyTheme(currentTheme === "beige" ? "charcoal" : "beige");
+    render();
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-theme-choice]").forEach((btn) => btn.addEventListener("click", () => {
+    const choice = btn.dataset.themeChoice as "charcoal" | "beige" | undefined;
+    if (choice) {
+      applyTheme(choice);
+      render();
+    }
+  }));
 }
 
 function sessionMenu(): string {
