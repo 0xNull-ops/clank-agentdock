@@ -61,6 +61,8 @@ import {
 import { planContractOf, planViewForSession } from "./plan-lifecycle";
 import { SkillStore, type SkillTurnSnapshot } from "./skills";
 import { resolveProviderRoute } from "./provider-routing";
+import { curateDiscoveredModels } from "./model-catalog";
+import { planRouteHandoff } from "./route-handoff";
 
 const CACHED_MODELS_KEY = "agentdock.provider.cachedModels";
 
@@ -84,6 +86,8 @@ export class AgentRuntimeBridge {
   private readonly runs = new Map<string, AbortController>();
   private readonly approvals = new Map<string, { sessionId: string; persist: boolean; resolve: (decision: "allow" | "deny") => void }>();
   private readonly histories = new Map<string, NormalizedMessage[]>();
+  /** The provider/model that produced each session's stored history. */
+  private readonly historyRoutes = new Map<string, { providerId: string; modelId: string }>();
   private readonly subagentActivities = new Map<string, SubagentActivity>();
   private readonly checkpoints: CheckpointCoordinator;
 
@@ -98,8 +102,20 @@ export class AgentRuntimeBridge {
   }
 
   /** Hydrate provider replay state without exposing provider-only frames to the webview. */
-  public restoreHistory(sessionId: string, messages: NormalizedMessage[]): void {
+  public restoreHistory(sessionId: string, messages: NormalizedMessage[], route?: { providerId: string; modelId: string }): void {
     this.histories.set(sessionId, messages.filter((message) => message.role !== "system"));
+    if (route) this.historyRoutes.set(sessionId, route);
+    else this.historyRoutes.delete(sessionId);
+  }
+
+  /** The route that produced a session's stored history, if any turn has run. */
+  public historyRoute(sessionId: string): { providerId: string; modelId: string } | undefined {
+    return this.historyRoutes.get(sessionId);
+  }
+
+  /** Whether a session already carries replayable conversation state. */
+  public hasHistory(sessionId: string): boolean {
+    return (this.histories.get(sessionId)?.length ?? 0) > 0;
   }
 
   /** Bracket future mutating tool work with a durable before snapshot. */
@@ -156,10 +172,18 @@ export class AgentRuntimeBridge {
       label: model.displayName ?? model.id,
       hint: model.capabilities?.reasoning ? "reasoning · manual" : model.capabilities?.tools ? "tools · manual" : "manual",
     }));
-    return mergeModelOptions([...manual, ...(cachedByProfile[active.id] ?? [])], [
+    const known = [...manual, ...(cachedByProfile[active.id] ?? [])];
+    // Only surface the session's selection when the active profile has no
+    // catalogue yet. Once we know what the profile routes, a selection left
+    // over from a deleted provider must not reappear in the picker.
+    const selectionIsRoutable = !selectedModel
+      || known.length === 0
+      || known.some((option) => option.id === selectedModel)
+      || active.defaultModel === selectedModel;
+    return mergeModelOptions(known, [
       active.defaultModel ?? "",
       ...Object.values(active.modeDefaults).filter((value): value is string => Boolean(value)),
-      selectedModel ?? "",
+      selectionIsRoutable ? selectedModel ?? "" : "",
     ]);
   }
 
@@ -198,11 +222,11 @@ export class AgentRuntimeBridge {
       } finally {
         clearTimeout(timeout);
       }
-      const models = discovered.map<ModelOption>((model) => ({
+      const models = curateDiscoveredModels(profile.id, discovered.map<ModelOption>((model) => ({
         id: model.id,
         label: model.displayName ?? model.id,
         hint: [model.tools ? "tools" : "text", model.reasoning ? "reasoning" : "standard"].join(" · "),
-      }));
+      })));
       const cached = cachedModelsByProfile(this.host.context);
       // A successful /models response is the authoritative discovered catalog.
       // Manual/default entries are merged only at presentation and resolution
@@ -239,6 +263,7 @@ export class AgentRuntimeBridge {
   public reset(sessionId: string): void {
     this.cancel(sessionId);
     this.histories.delete(sessionId);
+    this.historyRoutes.delete(sessionId);
   }
 
   public async approve(approvalId: string, decision: "allow" | "deny"): Promise<void> {
@@ -346,8 +371,25 @@ export class AgentRuntimeBridge {
           ...input.images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
         ]
       : userText;
+    // A model or provider swap mid-conversation cannot simply replay the old
+    // history: reasoning blobs, opaque frames, and tool-call ids are specific to
+    // the endpoint that produced them, and strict endpoints reject them. Hand
+    // the conversation over instead of dropping it.
+    const priorRoute = this.historyRoutes.get(input.sessionId);
+    const currentRoute = { providerId: configuration.providerId, modelId: configuration.model };
+    const priorHistory = this.histories.get(input.sessionId) ?? [];
+    const handoff = planRouteHandoff(priorRoute, currentRoute, priorHistory);
+    if (handoff) {
+      this.histories.set(input.sessionId, handoff.messages);
+      // Record the new route immediately: the stored history is now written for
+      // it, so a failed turn must not replay the handoff (and its notice) again.
+      this.historyRoutes.set(input.sessionId, currentRoute);
+      this.host.post({ type: "notice", level: "warning", message: handoff.notice });
+    }
+    const carriedHistory = handoff ? handoff.messages : priorHistory;
     const initialMessages: NormalizedMessage[] = [
-      ...(this.histories.get(input.sessionId) ?? []),
+      ...carriedHistory,
+      ...(handoff ? [{ role: "developer" as const, content: handoff.continuityNote }] : []),
       { role: "user", content: userContent },
     ];
     const permissionEngine = modePermissionEngine(mode, () => this.modes.get(mode.slug));
@@ -453,6 +495,7 @@ export class AgentRuntimeBridge {
       });
       completedCleanly = !controller.signal.aborted && result.status !== "cancelled" && result.status !== "error" && result.status !== "waiting_for_approval";
       this.histories.set(input.sessionId, result.messages.filter((message) => message.role !== "system"));
+      this.historyRoutes.set(input.sessionId, currentRoute);
       await this.persistence.recordRun(session, result);
       if (controller.signal.aborted || result.status === "cancelled") this.host.post({ type: "runState", state: "cancelled", runId: input.sessionId });
       else if (result.status === "error") this.host.post({ type: "runState", state: "error", runId: input.sessionId });
@@ -991,10 +1034,43 @@ function activeProfileFromState(context: vscode.ExtensionContext, requestedId?: 
   return profiles.find((profile) => profile.id === requestedId) ?? profiles.find((profile) => profile.id === activeId) ?? profiles[0];
 }
 
+/**
+ * Discovered models keyed by profile, with entries for profiles that no longer
+ * exist filtered out. Deleting a provider used to leave its catalogue behind,
+ * so the picker kept offering models from endpoints the user had removed.
+ */
 export function cachedModelsByProfile(context: vscode.ExtensionContext): Record<string, ModelOption[]> {
   const stored = context.globalState.get<unknown>(CACHED_MODELS_KEY, {});
   if (!stored || Array.isArray(stored) || typeof stored !== "object") return {};
-  return stored as Record<string, ModelOption[]>;
+  const known = new Set(context.globalState.get<ProviderProfile[]>(PROVIDER_PROFILES_STATE_KEY, []).map((profile) => profile.id));
+  const entries = Object.entries(stored as Record<string, ModelOption[]>).filter(([profileId]) => known.has(profileId));
+  return Object.fromEntries(entries);
+}
+
+/**
+ * Drop the discovery cache for profiles that were deleted. Called after a
+ * profile is removed so stale catalogues never resurface, and self-healing on
+ * startup for caches written before this pruning existed.
+ */
+export async function pruneCachedModels(context: vscode.ExtensionContext): Promise<void> {
+  const stored = context.globalState.get<unknown>(CACHED_MODELS_KEY, {});
+  if (!stored || Array.isArray(stored) || typeof stored !== "object") return;
+  const known = new Set(context.globalState.get<ProviderProfile[]>(PROVIDER_PROFILES_STATE_KEY, []).map((profile) => profile.id));
+  const source = stored as Record<string, ModelOption[]>;
+  const retained = Object.fromEntries(Object.entries(source).filter(([profileId]) => known.has(profileId)));
+  if (Object.keys(retained).length === Object.keys(source).length) return;
+  await context.globalState.update(CACHED_MODELS_KEY, retained);
+}
+
+/** Every model id the given profile can currently route, manual plus discovered. */
+export function modelIdsForProfile(context: vscode.ExtensionContext, profileId: string): Set<string> {
+  const profile = context.globalState.get<ProviderProfile[]>(PROVIDER_PROFILES_STATE_KEY, []).find((candidate) => candidate.id === profileId);
+  const discovered = cachedModelsByProfile(context)[profileId] ?? [];
+  return new Set([
+    ...(profile?.manualModels.map((model) => model.id) ?? []),
+    ...discovered.map((model) => model.id),
+    ...(profile?.defaultModel ? [profile.defaultModel] : []),
+  ]);
 }
 
 async function contextPrompt(text: string, refs: RuntimeContextRef[]): Promise<string> {

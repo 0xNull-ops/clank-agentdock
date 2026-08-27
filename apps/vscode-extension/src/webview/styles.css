@@ -216,6 +216,9 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .checkpoint-heading { display: flex; align-items: center; gap: 8px; }
 .checkpoint-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 5px; color: var(--forge-text); background: var(--forge-input); border: 1px solid var(--forge-border); font-size: 13px; }
 .approval-card { max-width: 640px; margin: 10px auto; padding: 12px; border: 1px solid var(--forge-border-strong); border-radius: var(--forge-radius-md); background: var(--forge-raised); }
+.approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.approval-actions button { cursor: pointer; }
+.approval-settled { color: var(--forge-text-secondary); font-size: 11px; font-family: var(--forge-code); text-transform: uppercase; letter-spacing: .04em; }
 
 /* Composer */
 .composer-wrap { padding: 6px 14px 12px; background: var(--forge-canvas); }

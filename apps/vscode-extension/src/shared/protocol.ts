@@ -269,6 +269,8 @@ export type ExtensionToUiMessage =
   | { type: "usageUpdated"; usage: UsageSnapshot }
   | { type: "settingsState"; state: HarnessSettingsState }
   | { type: "providerTestResult"; profileId: string; success: boolean; message: string }
+  /** Non-fatal transcript note, for example a mid-conversation route handoff. */
+  | { type: "notice"; level: "info" | "warning"; message: string }
   | { type: "error"; message: string; kind: "provider" | "tool" | "permission" | "workspace" | "unknown" };
 
 export interface ChatMessage {

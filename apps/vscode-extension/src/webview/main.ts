@@ -107,6 +107,8 @@ let modelPolicy: ModelPolicyView = { policy: "user-selectable" };
 let runState: "idle" | "running" | "awaiting_approval" | "complete" | "cancelled" | "error" = "idle";
 let contextRefs: ContextRef[] = [];
 let approval: ToolApproval | undefined;
+/** Containers that already carry a delegated click listener. */
+const transcriptDelegationBound = new WeakSet<HTMLElement>();
 let plan: PlanView | undefined;
 let checkpoints: CheckpointSummaryCard[] = [];
 let checkpointConflict: { checkpointId: string; paths: string[]; message: string } | undefined;
@@ -246,6 +248,10 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
         loading: false,
       };
       if (currentView === "settings") render();
+      break;
+    case "notice":
+      // Advisory only: never move the run out of its current state.
+      appendSystemMessage(`${message.level === "warning" ? "⚠ " : ""}${message.message}`);
       break;
     case "error":
       historyBusy = false;
@@ -683,10 +689,6 @@ function renderTranscript(): void {
       return;
     }
     transcript.innerHTML = emptyState(mode.label);
-    document.querySelectorAll<HTMLButtonElement>("[data-prompt]").forEach((button) => button.addEventListener("click", () => {
-      const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
-      if (input) { input.value = button.dataset.prompt ?? ""; input.focus(); }
-    }));
     return;
   }
 
@@ -1572,6 +1574,25 @@ function providerPresetHelp(preset: ProviderPresetView): string {
   return `<div class="provider-preset-help"><b>${escapeHtml(preset.name)}</b><span>${escapeHtml(help)}</span>${preset.helpUrl ? `<code>${escapeHtml(preset.helpUrl)}</code>` : ""}</div>`;
 }
 
+/**
+ * Workspace and user modes that can be delegated to, so the directory reflects
+ * what is actually spawnable rather than only the built-in six.
+ */
+function customSubagentEntries(): Array<{ slug: string; name: string; desc: string; defaultAuth: string; icon: string }> {
+  const builtInSlugs = new Set(["explore", "general", "test", "review", "research", "implementer"]);
+  return (settingsState?.modes ?? [])
+    .filter((mode) => mode.scope !== "built-in" && (mode.type === "subagent" || mode.type === "all") && !builtInSlugs.has(mode.slug))
+    .map((mode) => ({
+      slug: mode.slug,
+      name: mode.name,
+      desc: mode.description || `${mode.scope === "global" ? "User" : "Project"} mode${mode.model ? ` · ${mode.model}` : ""}.`,
+      // ModeDetailView does not carry delegation authority, so the card states
+      // the conservative default rather than guessing at write access.
+      defaultAuth: "read-only",
+      icon: mode.scope === "global" ? "👤" : "📁",
+    }));
+}
+
 function renderSubagentsTab(): string {
   const subagentsState = settingsState?.subagents;
   const authority = subagentsState?.defaultAuthority ?? "read-only";
@@ -1659,7 +1680,7 @@ function renderSubagentsTab(): string {
         <label>Available Subagent Directory</label>
         <p class="setting-help">Specialized agents available for orchestration and task delegation in this workspace.</p>
         <div class="subagent-directory-grid" style="display: grid; gap: 8px; margin-top: 8px;">
-          ${builtInSubagentsList.map((agent) => `
+          ${[...builtInSubagentsList, ...customSubagentEntries()].map((agent) => `
             <div class="subagent-dir-card" style="display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); background: var(--forge-surface-2);">
               <span style="font-size: 16px;">${agent.icon}</span>
               <div style="flex: 1; min-width: 0;">
@@ -1786,7 +1807,10 @@ function subagentCard(item: SubagentActivity): string {
 }
 
 function approvalCard(item: ToolApproval): string {
-  return `<article class="approval-card"><div class="approval-heading"><span class="approval-icon">!</span><div><p class="kicker">PERMISSION REQUEST</p><h3>${escapeHtml(item.toolName)}</h3></div><span class="risk ${item.risk}">${item.risk} risk</span></div><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(item.reason)}</small><div class="approval-actions"><button data-action="deny" class="quiet-button">Deny</button><button data-action="approve" class="approve-button">Approve once</button></div></article>`;
+  // The approval id travels on the buttons so the delegated transcript handler
+  // resolves the right request even when several cards are on screen.
+  const id = escapeHtml(item.id);
+  return `<article class="approval-card" id="approval-${id}" data-approval-id="${id}"><div class="approval-heading"><span class="approval-icon">!</span><div><p class="kicker">PERMISSION REQUEST</p><h3>${escapeHtml(item.toolName)}</h3></div><span class="risk ${item.risk}">${item.risk} risk</span></div><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(item.reason)}</small><div class="approval-actions"><button type="button" data-action="deny" data-approval-id="${id}" class="quiet-button">Deny</button><button type="button" data-action="approve" data-approval-id="${id}" class="approve-button">Approve once</button></div></article>`;
 }
 
 function planCard(item: PlanView): string {
@@ -2197,42 +2221,7 @@ function wireChatInteractions(): void {
       }, 50);
     }
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-copy-msg]").forEach((btn) => btn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const id = btn.dataset.copyMsg;
-    const item = timeline.find((t) => t.id === id);
-    if (item && "text" in item && item.text && typeof navigator !== "undefined" && navigator.clipboard) {
-      void navigator.clipboard.writeText(item.text);
-      const prev = btn.textContent;
-      btn.textContent = "✓ Copied";
-      setTimeout(() => { btn.textContent = prev; }, 1500);
-    }
-  }));
   document.querySelector<HTMLButtonElement>("[data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
-  document.querySelector<HTMLButtonElement>("[data-action=approve]")?.addEventListener("click", () => { if (approval) vscode.postMessage({ type: "approveTool", approvalId: approval.id }); });
-  document.querySelector<HTMLButtonElement>("[data-action=deny]")?.addEventListener("click", () => { if (approval) vscode.postMessage({ type: "denyTool", approvalId: approval.id }); });
-  document.querySelectorAll<HTMLButtonElement>("[data-action=checkpoint-diff]").forEach((button) => button.addEventListener("click", () => {
-    const checkpointId = button.dataset.checkpointId;
-    if (checkpointId) vscode.postMessage({ type: "openCheckpointDiff", checkpointId });
-  }));
-  document.querySelectorAll<HTMLButtonElement>("[data-action=checkpoint-revert]").forEach((button) => button.addEventListener("click", () => {
-    const checkpointId = button.dataset.checkpointId;
-    if (!checkpointId || !window.confirm("Revert this agent checkpoint? Revert is guarded and will stop if the workspace changed.")) return;
-    vscode.postMessage({ type: "revertCheckpoint", checkpointId });
-  }));
-  document.querySelectorAll<HTMLButtonElement>("[data-checkpoint-path]").forEach((button) => button.addEventListener("click", () => {
-    const checkpointId = button.dataset.checkpointId;
-    const path = button.dataset.checkpointPath;
-    if (checkpointId && path) vscode.postMessage({ type: "openCheckpointDiff", checkpointId, path });
-  }));
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-context]").forEach((button) => button.addEventListener("click", () => {
-    const refId = button.dataset.removeContext;
-    if (!refId) return;
-    contextRefs = contextRefs.filter((ref) => ref.id !== refId);
-    vscode.postMessage({ type: "removeContext", refId });
-    updateContextChips();
-  }));
   document.querySelector<HTMLButtonElement>("[data-action=attach]")?.addEventListener("click", () => {
     vscode.postMessage({ type: "pickContext" });
   });
@@ -2240,13 +2229,120 @@ function wireChatInteractions(): void {
     btn.addEventListener("click", () => startNewSession());
   });
   wireModelPickerToggle();
-  for (const action of ["approve", "revise", "save", "discard"] as const) {
-    document.querySelector<HTMLButtonElement>(`[data-action=plan-${action}]`)?.addEventListener("click", () => {
-      if (!plan) return;
-      const type = `${action}Plan` as "approvePlan" | "revisePlan" | "savePlan" | "discardPlan";
-      vscode.postMessage({ type, planId: plan.id, revision: plan.revision });
-    });
-  }
+  wireTranscriptDelegation();
+  wireContextChipDelegation();
+}
+
+/**
+ * Transcript cards (approvals, plans, checkpoints, messages) are written into
+ * #transcript after this module wires the shell, and renderTranscript replaces
+ * the container's innerHTML wholesale. Per-node listeners therefore never
+ * survive, which is why Approve/Deny used to be inert. Delegating from the
+ * stable #transcript element keeps every card interactive no matter when it
+ * was inserted or re-rendered.
+ */
+function wireTranscriptDelegation(): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript || transcriptDelegationBound.has(transcript)) return;
+  transcriptDelegationBound.add(transcript);
+
+  transcript.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target || typeof target.closest !== "function") return;
+    const button = target.closest<HTMLElement>("[data-action],[data-copy-msg],[data-checkpoint-path],[data-prompt]");
+    if (!button || (typeof transcript.contains === "function" && !transcript.contains(button))) return;
+
+    if (button.dataset.copyMsg) {
+      event.preventDefault();
+      event.stopPropagation();
+      copyTimelineMessage(button, button.dataset.copyMsg);
+      return;
+    }
+
+    if (button.dataset.prompt !== undefined) {
+      const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
+      if (input) { input.value = button.dataset.prompt ?? ""; input.focus(); }
+      return;
+    }
+
+    const action = button.dataset.action;
+    if (!action) return;
+
+    switch (action) {
+      case "approve":
+      case "deny": {
+        event.preventDefault();
+        const approvalId = button.dataset.approvalId ?? approval?.id;
+        if (!approvalId) return;
+        // Freeze the card so a second click cannot resolve the same request twice.
+        settleApprovalCard(approvalId, action === "approve" ? "Approved" : "Denied");
+        vscode.postMessage({ type: action === "approve" ? "approveTool" : "denyTool", approvalId });
+        return;
+      }
+      case "checkpoint-diff": {
+        const checkpointId = button.dataset.checkpointId;
+        if (checkpointId) vscode.postMessage({ type: "openCheckpointDiff", checkpointId });
+        return;
+      }
+      case "checkpoint-revert": {
+        const checkpointId = button.dataset.checkpointId;
+        if (!checkpointId || !window.confirm("Revert this agent checkpoint? Revert is guarded and will stop if the workspace changed.")) return;
+        vscode.postMessage({ type: "revertCheckpoint", checkpointId });
+        return;
+      }
+      case "plan-approve":
+      case "plan-revise":
+      case "plan-save":
+      case "plan-discard": {
+        if (!plan) return;
+        const verb = action.slice("plan-".length) as "approve" | "revise" | "save" | "discard";
+        const type = `${verb}Plan` as "approvePlan" | "revisePlan" | "savePlan" | "discardPlan";
+        vscode.postMessage({ type, planId: plan.id, revision: plan.revision });
+        return;
+      }
+      default:
+        break;
+    }
+
+    const checkpointPath = button.dataset.checkpointPath;
+    const checkpointId = button.dataset.checkpointId;
+    if (checkpointPath && checkpointId) vscode.postMessage({ type: "openCheckpointDiff", checkpointId, path: checkpointPath });
+  });
+}
+
+/** Context chips are re-rendered by updateContextChips, so delegate too. */
+function wireContextChipDelegation(): void {
+  const chips = document.querySelector<HTMLElement>("#context-chips");
+  if (!chips || transcriptDelegationBound.has(chips)) return;
+  transcriptDelegationBound.add(chips);
+  chips.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target || typeof target.closest !== "function") return;
+    const button = target.closest<HTMLElement>("[data-remove-context]");
+    const refId = button?.dataset.removeContext;
+    if (!refId) return;
+    contextRefs = contextRefs.filter((ref) => ref.id !== refId);
+    vscode.postMessage({ type: "removeContext", refId });
+    updateContextChips();
+  });
+}
+
+function copyTimelineMessage(button: HTMLElement, id: string): void {
+  const item = timeline.find((entry) => entry.id === id);
+  if (!item || !("text" in item) || !item.text) return;
+  if (typeof navigator === "undefined" || !navigator.clipboard) return;
+  void navigator.clipboard.writeText(item.text);
+  const previous = button.textContent;
+  button.textContent = "✓ Copied";
+  setTimeout(() => { button.textContent = previous; }, 1500);
+}
+
+/** Replace a decided approval's buttons with its outcome. */
+function settleApprovalCard(approvalId: string, outcome: string): void {
+  const card = document.querySelector<HTMLElement>(`[data-approval-id="${approvalId}"]`);
+  const actions = card?.querySelector?.<HTMLElement>(".approval-actions");
+  if (actions) actions.innerHTML = `<span class="approval-settled">${outcome}</span>`;
+  if (approval?.id === approvalId) approval = undefined;
 }
 
 function wireSettingsInteractions(): void {

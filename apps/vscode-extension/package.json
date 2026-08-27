@@ -99,6 +99,13 @@
           "default": "openai-compatible",
           "description": "Model id used when a new session starts. Configure the endpoint-specific id under Agent Harness › Provider: Model."
         },
+        "agentdock.maxSteps": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum autonomous tool steps allowed for one parent agent turn before the loop stops."
+        },
         "agentdock.subagents.defaultAuthority": {
           "type": "string",
           "enum": ["read-only", "same-as-parent", "write"],

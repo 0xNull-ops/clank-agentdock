@@ -25,7 +25,7 @@ import {
   BUILT_IN_MODES,
 } from "./shared/protocol";
 import { planViewForSession } from "./runtime/plan-lifecycle";
-import { AgentRuntimeBridge, cachedModelsByProfile } from "./runtime/bridge";
+import { AgentRuntimeBridge, cachedModelsByProfile, modelIdsForProfile, pruneCachedModels } from "./runtime/bridge";
 import { SessionPersistenceCoordinator, type RestoredSession } from "./runtime/session-persistence";
 import {
   ProviderProfileStore,
@@ -79,6 +79,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     context.subscriptions.push(
+      provider,
       vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
         webviewOptions: { retainContextWhenHidden: true },
       }),
@@ -146,10 +147,16 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   private restoredTools: ToolActivity[];
   private restoredSubagents: SubagentActivity[];
   private modeSelectionRequired = false;
+  /** Report a Freebuff port conflict once per occurrence, not once per turn. */
+  private freebuffPortConflictReported = false;
   private acceptedModeSource: string | undefined;
   private sessionOperations: Promise<void> = Promise.resolve();
   private readonly contextSnapshots = new Map<string, { ref: ContextRef; snapshot: string }>();
-  private readonly freebuffSidecar = new FreebuffSidecarManager();
+  /** Sidecar stdout/stderr, so a failed start is diagnosable from the UI. */
+  private readonly freebuffLog = vscode.window.createOutputChannel("Clank · Freebuff Sidecar");
+  private readonly freebuffSidecar = new FreebuffSidecarManager({
+    onLog: (line) => this.freebuffLog.appendLine(line),
+  });
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
@@ -181,7 +188,15 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence, providerProfiles, customModes, skills);
     context.subscriptions.push(customModes.onDidChange(() => this.handleModesReloaded()));
     context.subscriptions.push(skills.onDidChange(() => this.postSkillState()));
-    if (restored) this.runtime.restoreHistory(restored.session.id, replayMessages ?? restored.messages);
+    if (restored) {
+      this.runtime.restoreHistory(
+        restored.session.id,
+        replayMessages ?? restored.messages,
+        restored.session.providerId && restored.session.modelId
+          ? { providerId: restored.session.providerId, modelId: restored.session.modelId }
+          : undefined,
+      );
+    }
   }
 
   public async refreshModels(notifyUser = true): Promise<void> {
@@ -265,9 +280,11 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             void vscode.window.showInformationMessage(policy.reason ?? "The active mode fixes its model.");
             return;
           }
+          const previousModelId = this.modelId;
           this.modelId = message.modelId;
           this.post({ type: "modelChanged", modelId: this.modelId });
           await this.persistence.updateSessionSelection(this.sessionId, { modelId: this.modelId });
+          this.warnAboutMidConversationSwitch("model", previousModelId, this.modelId);
         });
         return;
       case "sendMessage":
@@ -441,6 +458,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
               this.freebuffSidecar.stop();
             }
             await this.providerProfiles.deleteProfile(profile.id);
+            await pruneCachedModels(this.context);
             await this.refreshProviderSelection();
             await this.postSettingsState();
             void vscode.window.showInformationMessage(`Deleted profile “${profile.name}”.`);
@@ -504,7 +522,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       case "openAdvancedSettings":
-        await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:freebuff.freebuff-agent-harness-vscode");
+        await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:freebuff.clank-harness");
         return;
       case "saveDefaultMode": {
         const config = vscode.workspace.getConfiguration("agentdock");
@@ -633,7 +651,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           async () => {
             const startResult = await this.freebuffSidecar.start(token);
             if (!startResult.ok) {
-              void vscode.window.showErrorMessage(`Failed to start Freebuff: ${startResult.message}`);
+              void vscode.window.showErrorMessage(`Failed to start Freebuff: ${startResult.message}`, "Show Log")
+                .then((choice) => { if (choice === "Show Log") this.freebuffLog.show(true); });
               await this.postSettingsState();
               return;
             }
@@ -705,7 +724,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           if (res.ok) {
             void vscode.window.showInformationMessage("Freebuff sidecar started.");
           } else {
-            void vscode.window.showErrorMessage(`Failed to start Freebuff: ${res.message}`);
+            void vscode.window.showErrorMessage(`Failed to start Freebuff: ${res.message}`, "Show Log")
+              .then((choice) => { if (choice === "Show Log") this.freebuffLog.show(true); });
           }
         }
         await this.postSettingsState();
@@ -1202,7 +1222,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     ], { title: "Agent Harness settings" });
     if (picked?.id === "modes") return this.manageModes();
     if (picked?.id === "providers") return this.manageProviders();
-    if (picked?.id === "settings") await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:freebuff.freebuff-agent-harness-vscode");
+    if (picked?.id === "settings") await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:freebuff.clank-harness");
   }
 
   private async createMode(seed?: ModeDefinition): Promise<void> {
@@ -1436,12 +1456,16 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       void vscode.window.showInformationMessage(`Fetched ${models.length} model${models.length === 1 ? "" : "s"} from ${profile.name}.`);
     } else if (action.id === "delete") {
       const confirmation = await vscode.window.showWarningMessage(`Delete provider profile “${profile.name}”?`, { modal: true }, "Delete");
-      if (confirmation === "Delete") await this.providerProfiles.deleteProfile(profile.id);
+      if (confirmation === "Delete") {
+        await this.providerProfiles.deleteProfile(profile.id);
+        await pruneCachedModels(this.context);
+      }
     }
     await this.refreshProviderSelection();
   }
 
   private async activateProvider(profile: ProviderProfile): Promise<void> {
+    const previousProviderId = this.runtime.historyRoute(this.sessionId)?.providerId;
     await this.providerProfiles.setActiveProfile(profile.id);
     try {
       await this.runtime.refreshModels(false, profile.id);
@@ -1449,6 +1473,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       // ignore
     }
     await this.refreshProviderSelection();
+    this.warnAboutMidConversationSwitch("provider", previousProviderId, profile.id);
     void vscode.window.showInformationMessage(`${profile.name} is now active.`);
   }
 
@@ -1460,13 +1485,28 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         : await this.providerProfiles.getActiveProfile();
       if (!profile) return;
       if (profile.id === "freebuff" || profile.id === "freebuff2api" || profile.baseUrl.includes("127.0.0.1:8080") || profile.baseUrl.includes("localhost:8080")) {
-        const isRunning = await this.freebuffSidecar.isRunning();
-        if (!isRunning) {
-          const detected = detectFreebuffCredentials();
-          const token = (await this.providerProfiles.getApiKey(profile.id)) || detected?.authToken || "";
-          if (token) {
-            await this.freebuffSidecar.start(token);
+        const probe = await this.freebuffSidecar.probe();
+        if (probe === "running") return;
+        if (probe === "port-conflict") {
+          // Auto-start cannot win a port fight, and retrying every turn just
+          // hides the real cause behind provider timeouts.
+          if (!this.freebuffPortConflictReported) {
+            this.freebuffPortConflictReported = true;
+            this.post({
+              type: "notice",
+              level: "warning",
+              message: `Port ${this.freebuffSidecar.getPort()} is held by a process that is not the Freebuff sidecar, so Freebuff requests will fail. Stop whatever owns that port, then reconnect Freebuff in Settings.`,
+            });
           }
+          return;
+        }
+        this.freebuffPortConflictReported = false;
+        const detected = detectFreebuffCredentials();
+        const token = (await this.providerProfiles.getApiKey(profile.id)) || detected?.authToken || "";
+        if (!token) return;
+        const started = await this.freebuffSidecar.start(token);
+        if (!started.ok) {
+          this.post({ type: "notice", level: "warning", message: `Freebuff sidecar did not start: ${started.message ?? "unknown error"}` });
         }
       }
     } catch {
@@ -1474,12 +1514,43 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /**
+   * Changing the route mid-conversation is allowed, but the transcript then has
+   * to be handed over rather than replayed verbatim. Tell the user before the
+   * next turn, so a surprise reasoning-trace drop is a stated tradeoff rather
+   * than a silent one. AgentRuntimeBridge performs the actual handoff.
+   */
+  private warnAboutMidConversationSwitch(kind: "model" | "provider", from: string | undefined, to: string | undefined): void {
+    if (!from || !to || from === to) return;
+    if (!this.runtime.hasHistory(this.sessionId)) return;
+    const label = kind === "model" ? "Model" : "Provider";
+    this.post({
+      type: "notice",
+      level: "warning",
+      message: `${label} switched to ${to} mid-conversation. The next turn hands this transcript to the new ${kind}: reasoning traces from ${from} cannot be carried over${kind === "provider" ? ", and unfinished tool calls will be summarized as text" : ""}. Start a new session for a clean context.`,
+    });
+  }
+
   private async refreshProviderSelection(): Promise<void> {
+    // Discovery caches for deleted profiles would otherwise keep feeding the
+    // picker models from endpoints the user removed.
+    await pruneCachedModels(this.context);
     const definition = this.customModes.get(this.mode);
     const profile = definition?.provider
       ? await this.providerProfiles.getProfile(definition.provider)
       : await this.providerProfiles.getActiveProfile();
     let model = definition?.model ?? (profile ? resolveProfileModel(profile, { mode: this.mode }) : undefined);
+
+    // A selection that the surviving profile cannot route is stale. Clearing it
+    // here is what stops a deleted provider's model from staying selected.
+    if (profile) {
+      const routable = modelIdsForProfile(this.context, profile.id);
+      if (routable.size > 0 && this.modelId && !routable.has(this.modelId)) this.modelId = "";
+      if (model && routable.size > 0 && !routable.has(model)) model = undefined;
+    } else {
+      this.modelId = "";
+    }
+
     if (!model && profile) {
       if (profile.defaultModel) {
         model = profile.defaultModel;
@@ -1497,6 +1568,12 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       this.modelId = model;
       await this.persistence.updateSessionSelection(this.sessionId, { modelId: model });
       this.post({ type: "modelChanged", modelId: model });
+    } else if (!this.modelId) {
+      // No provider can serve this session any more; fall back to the neutral
+      // placeholder so the picker stops advertising a removed endpoint.
+      this.modelId = MODEL_OPTIONS[0].id;
+      await this.persistence.updateSessionSelection(this.sessionId, { modelId: this.modelId });
+      this.post({ type: "modelChanged", modelId: this.modelId });
     }
     this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId, this.mode) });
     this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
@@ -1631,7 +1708,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     const defaultModel = config.get<string>("defaultModel", MODEL_OPTIONS[0].id);
     const maxSteps = config.get<number>("maxSteps", 20);
 
-    const sidecarStatus = this.freebuffSidecar.getStatus();
+    const sidecarStatus = await this.freebuffSidecar.refreshStatus();
 
     return {
       activeProfile,
@@ -1724,6 +1801,12 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
 
   private renderHtml(webview: vscode.Webview): string {
     return renderWebviewHtml(this.context.extensionUri, webview);
+  }
+
+  /** Stop the sidecar we spawned so it does not outlive the window. */
+  public dispose(): void {
+    this.freebuffSidecar.dispose();
+    this.freebuffLog.dispose();
   }
 }
 
