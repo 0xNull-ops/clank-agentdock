@@ -1257,6 +1257,34 @@ function renderProvidersTab(): string {
       </form>
     </div>
 
+    <div class="aihubmix-quick-setup-card">
+      <div class="aihubmix-quick-header">
+        <div class="aihubmix-title-row">
+          <span class="aihubmix-badge">1-Click Connect</span>
+          <span class="aihubmix-title">AI HubMix (Inferera API)</span>
+        </div>
+        <span class="sidecar-status-pill ${settingsState?.profiles.find((p) => p.id === "aihubmix") ? "running" : "stopped"}">
+          ${(() => {
+            const prof = settingsState?.profiles.find((p) => p.id === "aihubmix");
+            if (!prof) return "○ Ready to Connect";
+            if (prof.isActive) return "● Active";
+            return `● Added (${prof.models.length} models)`;
+          })()}
+        </span>
+      </div>
+      <p class="aihubmix-quick-desc">
+        Multi-model gateway (https://api.inferera.com) for Claude 3.7, GPT-4o, DeepSeek R1, Qwen, and Gemini.
+      </p>
+      <form class="aihubmix-setup-form" id="aihubmix-setup-form">
+        <div class="aihubmix-step-row input-row">
+          <input type="password" id="aihubmix-key-input" class="setting-input" placeholder="${settingsState?.profiles.find((p) => p.id === "aihubmix")?.hasApiKey ? "API Key is configured (paste to update)…" : "Paste your AI HubMix API key (sk-…)…"}" ${settingsState?.profiles.find((p) => p.id === "aihubmix")?.hasApiKey ? "" : "required"} />
+          <button type="submit" class="settings-action-btn primary aihubmix-connect-btn">
+            ${settingsState?.profiles.find((p) => p.id === "aihubmix") ? "Update & Pull Models" : "Connect & Pull Models"}
+          </button>
+        </div>
+      </form>
+    </div>
+
     <div class="settings-actions-bar">
       <button class="settings-action-btn full-width" data-action="add-profile">＋ Add Provider Profile</button>
     </div>
@@ -1996,6 +2024,19 @@ function wireSettingsInteractions(): void {
       btn.textContent = "Connecting…";
     }
     vscode.postMessage({ type: "setupFreebuff", authToken });
+  });
+
+  document.querySelector<HTMLFormElement>("#aihubmix-setup-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const keyInput = document.querySelector<HTMLInputElement>("#aihubmix-key-input");
+    const apiKey = (keyInput?.value ?? "").trim();
+    if (!apiKey) return;
+    const btn = document.querySelector<HTMLButtonElement>(".aihubmix-connect-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Connecting…";
+    }
+    vscode.postMessage({ type: "setupAiHubMix", apiKey });
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=cancel-provider-form]").forEach((btn) => btn.addEventListener("click", () => {

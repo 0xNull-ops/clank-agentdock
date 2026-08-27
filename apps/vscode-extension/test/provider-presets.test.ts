@@ -10,7 +10,10 @@ describe("provider presets", () => {
     expect(vibe?.baseUrl).toBe("http://127.0.0.1:8317/v1");
     expect(vibe?.defaultModel).toBeUndefined();
     expect(freebuff?.baseUrl).toBe("http://127.0.0.1:8080/v1");
+    const aihub = providerPreset("aihubmix");
+    expect(aihub?.baseUrl).toBe("https://api.inferera.com/v1");
     expect(providerPresets().map((preset) => preset.id)).toContain("vibeproxy");
+    expect(providerPresets().map((preset) => preset.id)).toContain("aihubmix");
   });
 
   test("templates pass the ordinary profile validator and contain no credentials", () => {

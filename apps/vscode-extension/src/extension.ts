@@ -713,6 +713,53 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         await this.postSettingsState();
         return;
       }
+      case "setupAiHubMix": {
+        const profileId = "aihubmix";
+        const baseUrl = "https://api.inferera.com/v1";
+        const key = message.apiKey.trim();
+        if (!key) {
+          void vscode.window.showErrorMessage("Please enter an AI HubMix API key.");
+          return;
+        }
+        const existing = await this.providerProfiles.getProfile(profileId);
+        if (!existing) {
+          await this.providerProfiles.createProfile({
+            id: profileId,
+            name: "AI HubMix",
+            type: "openai-compatible",
+            baseUrl,
+            headers: {},
+            manualModels: [],
+            modeDefaults: {},
+            compatibility: {
+              supportsDeveloperRole: true,
+              supportsParallelToolCalls: true,
+              requiresAssistantReasoningReplay: false,
+              requiresAssistantFrameReplay: false,
+              sendMaxTokensAs: "max_tokens",
+            },
+          });
+        }
+        await this.providerProfiles.setApiKey(profileId, key);
+        await this.providerProfiles.setActiveProfile(profileId);
+        try {
+          const fetched = await this.runtime.refreshModels(false, profileId, true);
+          if (fetched && fetched.length > 0) {
+            const currentProf = await this.providerProfiles.getProfile(profileId);
+            if (currentProf && !currentProf.defaultModel && fetched[0]) {
+              await this.providerProfiles.updateProfile(profileId, { defaultModel: fetched[0].id });
+            }
+            void vscode.window.showInformationMessage(`AI HubMix connected! Discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"}.`);
+          } else {
+            void vscode.window.showInformationMessage("AI HubMix profile created!");
+          }
+        } catch (err) {
+          void vscode.window.showWarningMessage(`AI HubMix profile saved, but model discovery probe failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        await this.refreshProviderSelection();
+        await this.postSettingsState();
+        return;
+      }
       case "approvePlan":
         await this.enqueueSessionOperation(() => this.approvePlan(message.planId, message.revision));
         return;
@@ -1659,6 +1706,8 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
       return typeof message.url === "string" && message.url.length > 0 && message.url.length <= 2048;
     case "setupFreebuff":
       return typeof message.authToken === "string" && message.authToken.length > 0 && message.authToken.length <= 4096;
+    case "setupAiHubMix":
+      return typeof message.apiKey === "string" && message.apiKey.length > 0 && message.apiKey.length <= 4096;
     case "activateProvider":
     case "setProviderApiKey":
     case "clearProviderApiKey":

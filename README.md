@@ -82,7 +82,7 @@ antigravity-ide --install-extension clank-harness.vsix
 
 ```bash
 # Clone the repository
-git clone https://github.com/0xNull-ops/agentdock.git
+git clone https://github.com/0xNull-ops/clank-agentdock.git
 cd agentdock
 
 # Install extension dependencies

@@ -317,6 +317,19 @@ h1 { margin: 1px 0 0; font-size: 13.5px; line-height: 1.2; font-weight: 600; let
 .freebuff-login-btn:hover { background: var(--forge-hover); border-color: var(--forge-border-strong); }
 .freebuff-connect-btn { height: 28px; white-space: nowrap; font-size: 11px; padding: 0 12px; }
 
+/* AI HubMix Quick Connect Card (Minimalist Charcoal) */
+.aihubmix-quick-setup-card { margin-bottom: 10px; padding: 12px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); animation: rise .15s ease both; }
+.aihubmix-quick-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.aihubmix-title-row { display: flex; align-items: center; gap: 6px; }
+.aihubmix-badge { font-size: 9.5px; font-weight: 600; font-family: var(--forge-code); text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: var(--forge-text-secondary); background: var(--forge-input); border: 1px solid var(--forge-border); }
+.aihubmix-title { font-size: 12px; font-weight: 600; color: var(--forge-text); }
+.aihubmix-quick-desc { margin: 0 0 8px; font-size: 10.5px; color: var(--forge-text-secondary); line-height: 1.4; }
+.aihubmix-setup-form { display: grid; gap: 6px; }
+.aihubmix-step-row { display: flex; align-items: center; gap: 6px; }
+.aihubmix-step-row.input-row { display: flex; gap: 6px; }
+.aihubmix-step-row.input-row input { flex: 1; height: 28px; font-size: 11px; }
+.aihubmix-connect-btn { height: 28px; white-space: nowrap; font-size: 11px; padding: 0 12px; }
+
 /* Forms */
 .settings-form-card { margin-bottom: 12px; padding: 12px; border: 1px solid var(--forge-border-strong); border-radius: var(--forge-radius-md); background: var(--forge-raised); animation: rise .15s ease both; }
 .form-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--forge-border); }

@@ -67,6 +67,7 @@ export type UiToExtensionMessage =
   | { type: "saveCustomMode"; mode: SaveCustomModeInput }
   | { type: "setupFreebuff"; authToken: string }
   | { type: "setupVibeProxy" }
+  | { type: "setupAiHubMix"; apiKey: string }
   | { type: "openExternalUrl"; url: string }
   | { type: "toggleFreebuffSidecar" };
 

@@ -39,6 +39,16 @@ const PRESETS: readonly ProviderPreset[] = Object.freeze([
     helpText: "Launch VibeProxy, connect an account, then fetch its live model catalog.",
   }),
   preset({
+    id: "aihubmix",
+    name: "AI HubMix",
+    description: "Inferera API multi-model gateway (Claude, GPT, DeepSeek, Qwen)",
+    category: "cloud",
+    baseUrl: "https://api.inferera.com/v1",
+    defaultModel: "claude-3-7-sonnet",
+    helpUrl: "https://aihubmix.com",
+    helpText: "Enter your AI HubMix API key to discover and access hundreds of models.",
+  }),
+  preset({
     id: "freebuff2api",
     name: "Freebuff2API",
     description: "Third-party local Freebuff-compatible proxy; credentials remain in the proxy.",

@@ -8,7 +8,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/0xNull-ops/agentdock.git"
+    "url": "https://github.com/0xNull-ops/clank-agentdock.git"
   },
   "engines": {
     "vscode": "^1.92.0"
