@@ -34,14 +34,7 @@ const SESSION_LIST_LIMIT = 2_000;
 let sessionPersistence: SessionPersistenceCoordinator | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  // Register the view provider up front so the panel always resolves, even if
-  // storage or provider-profile init throws below. A contributed-but-unresolved
-  // view is what produced the blank-panel symptom.
-  const failureProvider = new StartupFailureViewProvider(context.extensionUri, "Agent Harness failed to start.");
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(VIEW_ID, failureProvider, {
-      webviewOptions: { retainContextWhenHidden: true },
-    }),
     vscode.commands.registerCommand("agentdock.open", async () => {
       await vscode.commands.executeCommand("workbench.view.extension.agentdock");
     }),
@@ -58,13 +51,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const snapshot = recent ? await sessionPersistence.openSnapshot(recent.id) : undefined;
     const restoredSubagents = recent ? (await sessionPersistence.listSubagentRuns(recent.id)).map(subagentActivityFromRecord) : [];
     const activeProfile = await providerProfiles.getActiveProfile();
-    const provider = new AgentViewProvider(context, sessionPersistence, providerProfiles, customModes, restored, replayMessages, snapshot ? toolActivitiesFromSnapshot(snapshot) : [], restoredSubagents, activeProfile ? resolveProfileModel(activeProfile, { mode: restored?.session.activeMode }) : undefined);
+    const provider = new AgentViewProvider(
+      context,
+      sessionPersistence,
+      providerProfiles,
+      customModes,
+      restored,
+      replayMessages,
+      snapshot ? toolActivitiesFromSnapshot(snapshot) : [],
+      restoredSubagents,
+      activeProfile ? resolveProfileModel(activeProfile, { mode: restored?.session.activeMode }) : undefined,
+    );
 
-    // Replace the fallback provider with the fully initialized one.
-    context.subscriptions.splice(context.subscriptions.indexOf(failureProvider), 1);
     context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
-        webviewOptions: { retainContextWhenHidden: true }
+        webviewOptions: { retainContextWhenHidden: true },
       }),
       vscode.workspace.registerTextDocumentContentProvider(CHECKPOINT_DOCUMENT_SCHEME, provider.checkpointDocumentProvider()),
       provider.checkpointDocumentProvider(),
@@ -95,10 +96,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await provider.refreshModels(true);
       }),
       customModes,
-      { dispose: () => { void sessionPersistence?.close(); } }
+      { dispose: () => { void sessionPersistence?.close(); } },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const failureProvider = new StartupFailureViewProvider(context.extensionUri, `Agent Harness failed to start: ${message}`);
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(VIEW_ID, failureProvider, {
+        webviewOptions: { retainContextWhenHidden: true },
+      }),
+    );
     void vscode.window.showErrorMessage(
       `Agent Harness failed to start: ${message}`,
       "Retry",
