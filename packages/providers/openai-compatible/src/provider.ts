@@ -36,6 +36,15 @@ export interface OpenAICompatibleConfig {
   fetch?: typeof globalThis.fetch;
 }
 
+/** First value in the list that is a usable positive token count. */
+function firstPositiveInteger(values: readonly unknown[]): number | undefined {
+  for (const value of values) {
+    const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    if (Number.isFinite(numeric) && numeric > 0) return Math.floor(numeric);
+  }
+  return undefined;
+}
+
 const DEFAULT_CAPABILITIES: ModelCapabilities = {
   streaming: true,
   tools: true,
@@ -81,11 +90,29 @@ export class OpenAICompatibleProvider implements LLMProvider {
         const id = String(rawObj.id || rawObj.name || rawObj.model || (typeof item === "string" ? item : "")).trim();
         const displayName = String(rawObj.name || rawObj.displayName || id).trim();
         const configured = this.config.models?.[id] ?? {};
+        // Gateways advertise the context window under several names. Reading it
+        // is what makes an honest context meter possible; without it the host
+        // has no denominator and can only guess.
+        const discoveredWindow = firstPositiveInteger([
+          rawObj.context_length,
+          rawObj.context_window,
+          rawObj.contextWindow,
+          rawObj.max_context_tokens,
+          (rawObj.top_provider as Record<string, unknown> | undefined)?.context_length,
+        ]);
+        const discoveredOutput = firstPositiveInteger([
+          rawObj.max_output_tokens,
+          rawObj.maxOutputTokens,
+          rawObj.max_completion_tokens,
+          (rawObj.top_provider as Record<string, unknown> | undefined)?.max_completion_tokens,
+        ]);
         return {
           ...DEFAULT_CAPABILITIES,
           id,
           providerId: this.id,
           displayName: typeof configured.displayName === "string" ? configured.displayName : displayName || id,
+          ...(discoveredWindow ? { contextWindow: discoveredWindow } : {}),
+          ...(discoveredOutput ? { maxOutputTokens: discoveredOutput } : {}),
           ...configured,
         } as ModelInfo;
       })

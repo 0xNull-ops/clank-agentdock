@@ -141,6 +141,8 @@ export interface ModelOption {
   id: string;
   label: string;
   hint: string;
+  /** Total context tokens, when the provider advertises it. */
+  contextWindow?: number;
 }
 
 export interface ModelPolicyView {
@@ -246,6 +248,8 @@ export interface HarnessSettingsState {
   subagents?: SubagentSettingsView;
   workspaceName?: string;
   freebuffSidecarStatus?: FreebuffSidecarStatus;
+  /** Configured sidecar port, so the UI never hardcodes 8080. */
+  freebuffPort?: number;
   freebuffSidecarError?: string;
   detectedFreebuff?: {
     authToken: string;
@@ -358,6 +362,7 @@ export interface ToolApproval {
 
 export interface UsageSnapshot {
   usedTokens: number;
+  /** Total context window for the active model. Zero when it is unknown. */
   availableTokens: number;
   reservedOutputTokens: number;
 }

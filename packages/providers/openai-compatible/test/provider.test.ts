@@ -130,3 +130,45 @@ describe("OpenAI-compatible provider", () => {
     expect(validation.status).toBe(429);
   });
 });
+
+describe("model context window discovery", () => {
+  const listWith = async (entry: Record<string, unknown>) => {
+    const provider = new OpenAICompatibleProvider({
+      id: "test",
+      name: "Test",
+      baseURL: "https://example.test/v1",
+      fetch: (async () => new Response(JSON.stringify({ data: [entry] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+    });
+    return (await provider.listModels())[0];
+  };
+
+  test("reads OpenRouter-style context_length", async () => {
+    expect((await listWith({ id: "m", context_length: 200000 })).contextWindow).toBe(200000);
+  });
+
+  test("reads context_window and max_context_tokens", async () => {
+    expect((await listWith({ id: "m", context_window: 128000 })).contextWindow).toBe(128000);
+    expect((await listWith({ id: "m", max_context_tokens: 32768 })).contextWindow).toBe(32768);
+  });
+
+  test("reads a nested top_provider context length", async () => {
+    expect((await listWith({ id: "m", top_provider: { context_length: 65536 } })).contextWindow).toBe(65536);
+  });
+
+  test("accepts numeric strings and rejects junk", async () => {
+    expect((await listWith({ id: "m", context_length: "8192" })).contextWindow).toBe(8192);
+    expect((await listWith({ id: "m", context_length: 0 })).contextWindow).toBeUndefined();
+    expect((await listWith({ id: "m", context_length: "not a number" })).contextWindow).toBeUndefined();
+  });
+
+  test("leaves the window unset when the provider says nothing", async () => {
+    expect((await listWith({ id: "m" })).contextWindow).toBeUndefined();
+  });
+
+  test("reads max output tokens alongside the window", async () => {
+    expect((await listWith({ id: "m", max_output_tokens: 4096 })).maxOutputTokens).toBe(4096);
+  });
+});

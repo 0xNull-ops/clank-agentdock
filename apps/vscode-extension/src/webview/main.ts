@@ -120,6 +120,9 @@ const POSTURE_GLYPH: Record<PermissionPosture, string> = {
   auto: "\u26A1",
 };
 
+/** Token usage for the active turn. availableTokens 0 means the window is unknown. */
+let usage: { usedTokens: number; availableTokens: number; reservedOutputTokens: number } | undefined;
+
 let posture: PermissionPosture = "manual";
 let postures: PermissionPostureView[] = [
   { id: "manual", label: "Manual", description: "Ask before every edit and every command.", risk: "none", available: true },
@@ -296,6 +299,8 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       updateRunStateUi();
       break;
     case "usageUpdated":
+      usage = message.usage;
+      updateContextMeter();
       break;
     case "textDelta":
       appendStreamingText(message.text);
@@ -534,10 +539,7 @@ function renderChat(): void {
             <span class="status-dot ${runState === "running" ? "pulse" : ""}"></span>
             <span class="status-label">${statusLabel()}</span>
           </div>
-          <div class="context-track-wrap">
-            <span class="context-label">Context 12%</span>
-            <div class="context-pill-bar"><span style="width: 12%;"></span></div>
-          </div>
+          <div class="context-track-wrap" id="context-meter">${contextMeter()}</div>
         </div>
         <div class="rule"></div>
         <section class="transcript" id="transcript" aria-live="polite">${transcriptContent}</section>
@@ -568,6 +570,38 @@ function renderChat(): void {
 
   const transcript = document.querySelector<HTMLElement>("#transcript");
   if (transcript) transcript.scrollTop = transcript.scrollHeight;
+}
+
+/**
+ * Context usage for the active turn.
+ *
+ * The bar used to be a literal 12% with no data behind it. When the provider
+ * does not advertise a context window there is no honest denominator, so this
+ * shows the raw token count rather than inventing a percentage.
+ */
+function contextMeter(): string {
+  if (!usage || usage.usedTokens <= 0) {
+    return `<span class="context-label context-idle">Context</span><div class="context-pill-bar"><span style="width: 0%;"></span></div>`;
+  }
+  const used = usage.usedTokens + usage.reservedOutputTokens;
+  if (!usage.availableTokens) {
+    return `<span class="context-label" title="This provider does not report a context window">${formatTokens(used)} tokens</span><div class="context-pill-bar unknown"><span style="width: 0%;"></span></div>`;
+  }
+  const ratio = Math.max(0, Math.min(1, used / usage.availableTokens));
+  const percent = Math.round(ratio * 100);
+  const level = percent >= 90 ? "critical" : percent >= 75 ? "warn" : "";
+  return `<span class="context-label ${level}" title="${formatTokens(used)} of ${formatTokens(usage.availableTokens)} tokens">Context ${percent}%</span><div class="context-pill-bar ${level}"><span style="width: ${percent}%;"></span></div>`;
+}
+
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1000)}k`;
+  return String(value);
+}
+
+function updateContextMeter(): void {
+  const container = document.querySelector<HTMLElement>("#context-meter");
+  if (container) container.innerHTML = contextMeter();
 }
 
 function updateControlStrip(): void {
@@ -1471,7 +1505,7 @@ function renderProvidersTab(): string {
           <span class="freebuff-title">Freebuff Quick Connect</span>
         </div>
         <span class="sidecar-status-pill ${sidecarStatus === "running" ? "running" : detected ? "detected" : sidecarStatus === "error" ? "error" : "stopped"}">
-          ${sidecarStatus === "running" ? "● Sidecar Running (:8080)" : sidecarStatus === "starting" ? "⟳ Starting…" : detected ? "● Local Credentials Found" : "○ Terminal Auth Required"}
+          ${sidecarStatus === "running" ? `● Sidecar Running (:${settingsState?.freebuffPort ?? 8080})` : sidecarStatus === "starting" ? "⟳ Starting…" : detected ? "● Local Credentials Found" : "○ Terminal Auth Required"}
         </span>
       </div>
       <p class="freebuff-quick-desc">

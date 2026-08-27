@@ -271,6 +271,15 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .posture-option-main small { color: var(--forge-muted); font-size: 10px; line-height: 1.45; }
 .posture-option-check { flex: 0 0 auto; color: var(--forge-text); font-size: 12px; }
 
+/* Context meter: real numbers, and no percentage when there is no window. */
+.context-label.context-idle { opacity: .55; }
+.context-label.warn { color: #f59e0b; }
+.context-label.critical { color: #f87171; }
+.context-pill-bar > span { transition: width .25s ease; }
+.context-pill-bar.warn > span { background: #f59e0b; }
+.context-pill-bar.critical > span { background: #f87171; }
+.context-pill-bar.unknown { opacity: .35; }
+
 /* A skill that declares the job it belongs to. */
 .skill-option-wrap { display: flex; flex-direction: column; }
 .skill-job { display: flex; align-items: center; gap: 7px; padding: 3px 10px 6px 32px; }

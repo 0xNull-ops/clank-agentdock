@@ -182,6 +182,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   /** Sidecar stdout/stderr, so a failed start is diagnosable from the UI. */
   private readonly freebuffLog = vscode.window.createOutputChannel("Clank · Freebuff Sidecar");
   private readonly freebuffSidecar = new FreebuffSidecarManager({
+    port: freebuffPort(),
     onLog: (line) => this.freebuffLog.appendLine(line),
   });
 
@@ -703,11 +704,6 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             }
 
             const profileId = "freebuff";
-            const freebuffManualModels = FREEBUFF_REAL_MODELS.map((m) => ({
-              id: m.id,
-              displayName: `${m.displayName} (${m.category})`,
-              capabilities: { reasoning: m.hint.includes("reasoning"), tools: true },
-            }));
             const defaultFreebuffModel = detected?.activeModel || "deepseek/deepseek-v4-flash";
 
             const existing = await this.providerProfiles.getProfile(profileId);
@@ -719,7 +715,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
                 baseUrl: this.freebuffSidecar.getBaseUrl(),
                 headers: {},
                 defaultModel: defaultFreebuffModel,
-                manualModels: freebuffManualModels,
+                manualModels: [],
                 modeDefaults: {},
                 compatibility: {
                   supportsDeveloperRole: true,
@@ -732,7 +728,6 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             } else {
               await this.providerProfiles.updateProfile(profileId, {
                 baseUrl: this.freebuffSidecar.getBaseUrl(),
-                manualModels: freebuffManualModels,
                 defaultModel: existing.defaultModel || defaultFreebuffModel,
               });
             }
@@ -740,10 +735,28 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             await this.providerProfiles.setApiKey(profileId, token);
             await this.providerProfiles.setActiveProfile(profileId);
 
+            // The live sidecar is the source of truth for what this account can
+            // route. The curated table supplies display names only; writing it
+            // into manualModels made removed models persist forever.
+            let discovered: unknown[] | undefined;
             try {
-              await this.runtime.refreshModels(false, profileId);
+              discovered = await this.runtime.refreshModels(false, profileId);
             } catch {
               // ignore
+            }
+            if (!discovered || discovered.length === 0) {
+              await this.providerProfiles.updateProfile(profileId, {
+                manualModels: FREEBUFF_REAL_MODELS.map((model) => ({
+                  id: model.id,
+                  displayName: `${model.displayName} (${model.category})`,
+                  capabilities: { reasoning: model.hint.includes("reasoning"), tools: true },
+                })),
+              });
+              this.post({
+                type: "notice",
+                level: "warning",
+                message: "Freebuff did not report a model list, so the known free models were used as a fallback. Reconnect once the sidecar is healthy to pick up the live catalogue.",
+              });
             }
 
             await this.refreshProviderSelection();
@@ -1540,7 +1553,12 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         ? await this.providerProfiles.getProfile(definition.provider)
         : await this.providerProfiles.getActiveProfile();
       if (!profile) return;
-      if (profile.id === "freebuff" || profile.id === "freebuff2api" || profile.baseUrl.includes("127.0.0.1:8080") || profile.baseUrl.includes("localhost:8080")) {
+      const sidecarPort = this.freebuffSidecar.getPort();
+      const isSidecarProfile = profile.id === "freebuff"
+        || profile.id === "freebuff2api"
+        || profile.baseUrl.includes(`127.0.0.1:${sidecarPort}`)
+        || profile.baseUrl.includes(`localhost:${sidecarPort}`);
+      if (isSidecarProfile) {
         const probe = await this.freebuffSidecar.probe();
         if (probe === "running") return;
         if (probe === "port-conflict") {
@@ -1948,6 +1966,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       },
       workspaceName: vscode.workspace.name,
       freebuffSidecarStatus: sidecarStatus.status,
+      freebuffPort: this.freebuffSidecar.getPort(),
       freebuffSidecarError: sidecarStatus.error,
       detectedFreebuff: detectFreebuffCredentials(),
     };
@@ -2032,6 +2051,12 @@ function skillJobView(job: SkillJob): SkillJobView {
     ...(job.filePatterns?.length ? { filePatterns: [...job.filePatterns] } : {}),
     ...(job.subagents?.length ? { subagents: [...job.subagents] } : {}),
   };
+}
+
+/** Sidecar port, configurable because 8080 is very often already taken. */
+function freebuffPort(): number {
+  const value = vscode.workspace.getConfiguration("agentdock").get<number>("freebuff.port", 8080);
+  return Number.isInteger(value) && value >= 1024 && value <= 65535 ? value : 8080;
 }
 
 function modeSourceKey(entry: ReturnType<CustomModeStore["entry"]>): string | undefined {

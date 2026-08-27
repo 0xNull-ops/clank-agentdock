@@ -145,6 +145,13 @@
           "maximum": 2,
           "description": "Maximum delegation nesting depth. Increase to two for nested Orchestrate workflows."
         },
+        "agentdock.freebuff.port": {
+          "type": "integer",
+          "default": 8080,
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Local port for the managed Freebuff sidecar. Change it when another process already owns the default."
+        },
         "agentdock.provider.baseUrl": {
           "type": "string",
           "default": "",
