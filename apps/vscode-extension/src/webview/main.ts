@@ -1735,11 +1735,11 @@ function renderSubagentsTab(): string {
     <div class="subagents-settings">
       <div class="general-setting-item">
         <label for="subagent-authority">Subagent Authority Level</label>
-        <p class="setting-help">Controls whether delegated subagents can make code changes and edit files or only perform read-only analysis.</p>
+        <p class="setting-help">Controls whether delegated subagents can make code changes or only perform read-only analysis. This setting can only lower a mode's authority, never raise it: read-only roles such as Ask and Review stay read-only even on Write.</p>
         <select id="subagent-authority" class="setting-select">
           <option value="read-only" ${authority === "read-only" ? "selected" : ""}>Read-Only (Safest) — Subagents cannot modify any files</option>
           <option value="same-as-parent" ${authority === "same-as-parent" ? "selected" : ""}>Same as Parent — Inherit write capability if parent mode allows writing</option>
-          <option value="write" ${authority === "write" ? "selected" : ""}>Write Authority — Permit write-capable subagents (Implementer, General) to modify files</option>
+          <option value="write" ${authority === "write" ? "selected" : ""}>Write Authority — Permit write-capable subagents where the mode already delegates writes</option>
         </select>
         
         <div style="margin-top: 12px;">
@@ -2010,13 +2010,25 @@ function reasoningCard(item: { id: string; text: string; isStreaming?: boolean }
 }
 
 function subagentCard(item: SubagentActivity): string {
-  const icon = item.state === "complete" ? "✓" : item.state === "error" ? "!" : item.state === "cancelled" ? "×" : "↻";
+  const icon = item.state === "complete" ? "\u2713" : item.state === "error" ? "!" : item.state === "cancelled" ? "\u00D7" : "\u21BB";
   const inspected = item.filesInspected?.length ? `<div class="subagent-files"><span>inspected</span>${item.filesInspected.slice(0, 8).map((file) => `<code>${escapeHtml(file)}</code>`).join("")}</div>` : "";
   const changed = item.filesChanged?.length ? `<div class="subagent-files changed"><span>changed</span>${item.filesChanged.slice(0, 8).map((file) => `<code>${escapeHtml(file)}</code>`).join("")}</div>` : "";
   const followups = item.followups?.length ? `<ul>${item.followups.slice(0, 5).map((followup) => `<li>${escapeHtml(followup)}</li>`).join("")}</ul>` : "";
-  const activities = item.activities?.length ? `<details class="subagent-activity"><summary>Activity · ${item.activities.length}</summary>${item.activities.map((activity) => `<div class="subagent-activity-row ${activity.state}"><span>${activity.state === "complete" ? "✓" : activity.state === "error" ? "!" : "↻"}</span><b>${escapeHtml(activity.summary)}</b>${activity.detail ? `<pre>${escapeHtml(activity.detail)}</pre>` : ""}</div>`).join("")}</details>` : "";
+  const activities = item.activities?.length ? `<details class="subagent-activity"><summary>Activity \u00B7 ${item.activities.length}</summary>${item.activities.map((activity) => `<div class="subagent-activity-row ${activity.state}"><span>${activity.state === "complete" ? "\u2713" : activity.state === "error" ? "!" : "\u21BB"}</span><b>${escapeHtml(activity.summary)}</b>${activity.detail ? `<pre>${escapeHtml(activity.detail)}</pre>` : ""}</div>`).join("")}</details>` : "";
   const route = [item.providerName ?? item.providerId, item.modelId].filter(Boolean).join(" / ");
-  return `<details class="subagent-card" ${item.state === "running" || item.state === "queued" ? "open" : ""}><summary><span class="subagent-icon ${item.state}">${icon}</span><span class="subagent-main"><span class="kicker">SUBAGENT · DEPTH ${item.depth}</span><b>${escapeHtml(item.agent)}</b><small>${escapeHtml(item.task)}</small></span><span class="subagent-state">${item.state}</span></summary>${route ? `<div class="subagent-model">route · ${escapeHtml(route)}</div>` : ""}${activities}${item.summary ? `<p>${escapeHtml(item.summary)}</p>` : ""}${inspected}${changed}${followups}</details>`;
+
+  // A step meter makes a long-running child legible instead of just "running".
+  const running = item.state === "running" || item.state === "queued";
+  const budget = item.maxSteps ?? 0;
+  const used = item.step ?? 0;
+  const progress = running && budget > 0
+    ? `<div class="subagent-progress" title="Step ${used} of ${budget}"><span class="subagent-progress-bar"><span style="width:${Math.min(100, Math.round((used / budget) * 100))}%"></span></span><small>${used}/${budget}</small></div>`
+    : "";
+  const stop = running && item.cancellable !== false
+    ? `<button type="button" class="subagent-stop" data-action="cancel-subagent" data-task-id="${escapeHtml(item.id)}" title="Stop just this subagent">stop</button>`
+    : "";
+
+  return `<details class="subagent-card" ${running ? "open" : ""}><summary><span class="subagent-icon ${item.state}">${icon}</span><span class="subagent-main"><span class="kicker">SUBAGENT \u00B7 DEPTH ${item.depth}</span><b>${escapeHtml(item.agent)}</b><small>${escapeHtml(item.task)}</small></span>${progress}<span class="subagent-state">${item.state}</span>${stop}</summary>${route ? `<div class="subagent-model">route \u00B7 ${escapeHtml(route)}</div>` : ""}${activities}${item.summary ? `<p>${escapeHtml(item.summary)}</p>` : ""}${inspected}${changed}${followups}</details>`;
 }
 
 function approvalCard(item: ToolApproval): string {
@@ -2086,15 +2098,26 @@ function skillPicker(): string {
     const mandatory = mandatorySkillIds.includes(skill.id);
     const checked = mandatory || selectedSkillIds.includes(skill.id);
     const search = `${skill.name} ${skill.description} ${skill.id} ${skill.source ?? ""}`.toLocaleLowerCase();
-    return `<button type="button" class="skill-option ${checked ? "selected" : ""}" data-skill-id="${escapeHtml(skill.id)}" data-skill-search="${escapeHtml(search)}" ${mandatory ? "disabled" : ""}>
-      <span class="skill-check">${mandatory ? "◆" : checked ? "✓" : ""}</span>
-      <span class="skill-copy">
-        <b>${escapeHtml(skill.name)}</b>
-        <small>${escapeHtml(skill.description || skill.id)}</small>
-        ${skill.source ? `<span class="skill-source-path" title="${escapeHtml(skill.source)}">📁 ${escapeHtml(skill.source)}</span>` : ""}
-      </span>
-      <span class="skill-scope">${escapeHtml(skill.scope)}</span>
-    </button>`;
+    // A skill that declares a job says what it needs to run; offer it directly.
+    const job = skill.job;
+    const jobBits = job
+      ? [job.mode, job.posture, job.model].filter(Boolean).map((value) => escapeHtml(String(value))).join(" · ")
+      : "";
+    const jobRow = job
+      ? `<span class="skill-job"><span class="skill-job-tag">JOB</span><small>${jobBits || "configured run"}</small><span class="skill-job-run" data-skill-job="${escapeHtml(skill.id)}" role="button" tabindex="0">Run as job</span></span>`
+      : "";
+    return `<div class="skill-option-wrap" data-skill-search="${escapeHtml(search)}">
+      <button type="button" class="skill-option ${checked ? "selected" : ""}" data-skill-id="${escapeHtml(skill.id)}" ${mandatory ? "disabled" : ""}>
+        <span class="skill-check">${mandatory ? "\u25C6" : checked ? "\u2713" : ""}</span>
+        <span class="skill-copy">
+          <b>${escapeHtml(skill.name)}</b>
+          <small>${escapeHtml(skill.description || skill.id)}</small>
+          ${skill.source ? `<span class="skill-source-path" title="${escapeHtml(skill.source)}">\uD83D\uDCC1 ${escapeHtml(skill.source)}</span>` : ""}
+        </span>
+        <span class="skill-scope">${escapeHtml(skill.scope)}</span>
+      </button>
+      ${jobRow}
+    </div>`;
   }).join("");
   return `<section class="skill-picker" aria-label="Available skills">
     <div class="skill-picker-head"><b>Skills</b><small>Loaded for this conversation</small></div>
@@ -2273,6 +2296,21 @@ function wireSkillInteractions(): void {
     postSkillSelection();
     updateSkillControls();
   }));
+  document.querySelectorAll<HTMLElement>("[data-skill-job]").forEach((control) => {
+    const run = (event: Event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      const skillId = control.dataset.skillJob;
+      if (!skillId) return;
+      skillMenuOpen = false;
+      vscode.postMessage({ type: "applySkillJob", skillId });
+      updateSkillControls();
+    };
+    control.addEventListener("click", run);
+    control.addEventListener("keydown", (event) => {
+      if ((event as KeyboardEvent).key === "Enter" || (event as KeyboardEvent).key === " ") run(event);
+    });
+  });
   document.querySelector<HTMLInputElement>("#skill-search")?.addEventListener("input", (event) => {
     skillQuery = (event.target as HTMLInputElement).value;
     const query = skillQuery.trim().toLocaleLowerCase();
@@ -2578,6 +2616,13 @@ function wireTranscriptDelegation(): void {
         // Freeze the card so a second click cannot resolve the same request twice.
         settleApprovalCard(approvalId, action === "approve" ? "Approved" : "Denied");
         vscode.postMessage({ type: action === "approve" ? "approveTool" : "denyTool", approvalId });
+        return;
+      }
+      case "cancel-subagent": {
+        event.preventDefault();
+        event.stopPropagation();
+        const taskId = button.dataset.taskId;
+        if (taskId) vscode.postMessage({ type: "cancelSubagent", taskId });
         return;
       }
       case "checkpoint-diff": {

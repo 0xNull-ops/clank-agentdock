@@ -91,6 +91,8 @@ export class AgentRuntimeBridge {
   /** The provider/model that produced each session's stored history. */
   private readonly historyRoutes = new Map<string, { providerId: string; modelId: string }>();
   private readonly subagentActivities = new Map<string, SubagentActivity>();
+  /** Live orchestrators, so a single subagent can be cancelled without ending the turn. */
+  private readonly orchestrators = new Map<string, SubagentOrchestrator>();
   private readonly checkpoints: CheckpointCoordinator;
 
   public constructor(
@@ -258,6 +260,16 @@ export class AgentRuntimeBridge {
     }
   }
 
+  /**
+   * Stop one subagent without ending the parent turn. Whole-run cancellation
+   * remains available; this is the finer control the delegation view needs.
+   */
+  public cancelSubagent(sessionId: string, taskId: string): boolean {
+    const orchestrator = this.orchestrators.get(sessionId);
+    if (!orchestrator) return false;
+    return orchestrator.cancel(taskId);
+  }
+
   public isRunning(sessionId: string): boolean {
     return this.runs.has(sessionId);
   }
@@ -405,12 +417,16 @@ export class AgentRuntimeBridge {
     const subagentsConfig = vscode.workspace.getConfiguration("agentdock");
     const configuredAuthority = subagentsConfig.get<string>("subagents.defaultAuthority", "read-only");
     const requireWriteApproval = subagentsConfig.get<boolean>("subagents.requireWriteApproval", true);
-    const rootAuthority: DelegationEffects = configuredAuthority === "write" ? "write" : mode.delegationEffects;
-    const effectiveRootMode = configuredAuthority === "write" && (mode.slug === "ask" || mode.slug === "review")
-      ? { ...mode, delegationEffects: "write" as const }
-      : mode;
+    // The global authority setting narrows freely but may only raise a mode
+    // that already delegates with write effects. It used to silently upgrade
+    // Ask and Review — read-only roles — to write-capable delegation, which the
+    // control never said it would do.
+    const rootAuthority: DelegationEffects = configuredAuthority === "read-only"
+      ? "read-only"
+      : mode.delegationEffects;
+    const effectiveRootMode = mode;
 
-    const orchestrator = new SubagentOrchestrator({
+    const orchestrator: SubagentOrchestrator = new SubagentOrchestrator({
       rootParent: {
         mode: effectiveRootMode,
         authority: rootAuthority,
@@ -458,6 +474,7 @@ export class AgentRuntimeBridge {
         },
       },
     });
+    this.orchestrators.set(input.sessionId, orchestrator);
     const tools = this.createTools(orchestrator, controller.signal, skillSnapshot, availableSubagents, overrideSubagents).filter((tool) => modeAllowsAdvertisement(mode, tool));
 
     await this.persistence.startSession(session);
@@ -530,6 +547,7 @@ export class AgentRuntimeBridge {
       } else if (implementingPlanId) {
         await this.postPlanChanged(input.sessionId).catch(() => undefined);
       }
+      this.orchestrators.delete(input.sessionId);
       this.runs.delete(input.sessionId);
       for (const [approvalId, pending] of this.approvals) {
         if (pending.sessionId !== input.sessionId) continue;
@@ -837,6 +855,15 @@ export class AgentRuntimeBridge {
   }
 
   private onSubagentAgentEvent(task: SubagentExecutionRequest, event: AgentEvent): void {
+    // Step progress makes a long-running child legible while it works.
+    if (event.type === "step_started") {
+      const current = this.subagentActivities.get(task.id);
+      if (!current) return;
+      const updated = { ...current, step: event.step };
+      this.subagentActivities.set(task.id, updated);
+      this.host.post({ type: "subagentUpdate", subagent: updated });
+      return;
+    }
     if (event.type !== "tool_started" && event.type !== "tool_completed") return;
     const previous = this.subagentActivities.get(task.id);
     if (!previous) return;
@@ -1395,6 +1422,9 @@ function subagentActivity(event: SubagentEvent, defaultRoute: ProviderConfigurat
       ...(result.filesInspected ? { filesInspected: [...result.filesInspected] } : {}),
       ...(result.filesChanged ? { filesChanged: [...result.filesChanged] } : {}),
       ...(result.followups ? { followups: [...result.followups] } : {}),
+      ...(previous?.step ? { step: previous.step } : {}),
+      ...(previous?.maxSteps ? { maxSteps: previous.maxSteps } : {}),
+      cancellable: false,
     };
   }
   const task = event.task;
@@ -1409,6 +1439,10 @@ function subagentActivity(event: SubagentEvent, defaultRoute: ProviderConfigurat
     providerName: defaultRoute.providerName,
     ...(task.parentTaskId ? { parentRunId: task.parentTaskId } : {}),
     ...(event.type === "subagent_rejected" ? { summary: event.error.message } : {}),
+    ...(previous?.step ? { step: previous.step } : {}),
+    maxSteps: previous?.maxSteps ?? boundedSetting("subagents.maxSteps", 15, 1, 50),
+    // Queued and running children can still be stopped on their own.
+    cancellable: event.type === "subagent_queued" || event.type === "subagent_started" || event.type === "subagent_approval_required",
   };
 }
 

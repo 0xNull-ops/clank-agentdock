@@ -271,6 +271,23 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .posture-option-main small { color: var(--forge-muted); font-size: 10px; line-height: 1.45; }
 .posture-option-check { flex: 0 0 auto; color: var(--forge-text); font-size: 12px; }
 
+/* A skill that declares the job it belongs to. */
+.skill-option-wrap { display: flex; flex-direction: column; }
+.skill-job { display: flex; align-items: center; gap: 7px; padding: 3px 10px 6px 32px; }
+.skill-job-tag { padding: 1px 5px; border-radius: 3px; background: var(--forge-input); color: var(--forge-muted); font-family: var(--forge-code); font-size: 8.5px; letter-spacing: .08em; }
+.skill-job small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--forge-muted); font-family: var(--forge-code); font-size: 9.5px; }
+.skill-job-run { flex: 0 0 auto; padding: 2px 8px; border: 1px solid var(--forge-border); border-radius: 999px; color: var(--forge-text-secondary); cursor: pointer; font-size: 9.5px; }
+.skill-job-run:hover, .skill-job-run:focus-visible { border-color: var(--forge-border-strong); color: var(--forge-text); background: var(--forge-input); outline: none; }
+
+/* Subagent progress and per-child stop. */
+.subagent-progress { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.subagent-progress-bar { display: block; width: 46px; height: 3px; border-radius: 999px; background: var(--forge-border); overflow: hidden; }
+.subagent-progress-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--forge-accent, #60a5fa); transition: width .2s ease; }
+.subagent-progress small { color: var(--forge-muted); font-family: var(--forge-code); font-size: 9px; font-variant-numeric: tabular-nums; }
+.subagent-stop { flex: 0 0 auto; padding: 2px 7px; border: 1px solid var(--forge-border); border-radius: 999px; background: var(--forge-surface); color: var(--forge-muted); cursor: pointer; font-family: var(--forge-code); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
+.subagent-stop:hover { border-color: var(--forge-border-strong); color: var(--forge-text); }
+.subagent-children { margin-left: 14px; padding-left: 10px; border-left: 1px solid var(--forge-border); }
+
 /* The composer grows with its content rather than pinning to three rows. */
 .composer textarea { transition: height .1s ease; }
 

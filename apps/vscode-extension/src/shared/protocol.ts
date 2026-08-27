@@ -53,6 +53,9 @@ export type UiToExtensionMessage =
   | { type: "changeMode"; mode: AgentMode }
   | { type: "changeModel"; modelId: string }
   | { type: "changePosture"; posture: PermissionPosture }
+  | { type: "cancelSubagent"; taskId: string }
+  /** Adopt a skill's declared job: switch mode, posture, and model together. */
+  | { type: "applySkillJob"; skillId: string }
   | { type: "approveTool"; approvalId: string }
   | { type: "denyTool"; approvalId: string }
   | { type: "approvePlan"; planId: string; revision: number }
@@ -146,6 +149,16 @@ export interface ModelPolicyView {
   reason?: string;
 }
 
+/** The run configuration a skill declares for itself, if any. */
+export interface SkillJobView {
+  mode?: string;
+  posture?: PermissionPosture;
+  model?: string;
+  provider?: string;
+  filePatterns?: string[];
+  subagents?: string[];
+}
+
 export interface SkillOptionView {
   id: string;
   name: string;
@@ -153,6 +166,8 @@ export interface SkillOptionView {
   scope: "project" | "global" | "installed";
   sourceKind: "native" | "compatibility" | "installed";
   source?: string;
+  /** Present when the skill carries a `job:` block it can be run as. */
+  job?: SkillJobView;
 }
 
 export interface ModeOption {
@@ -326,6 +341,11 @@ export interface SubagentActivity {
   filesChanged?: string[];
   followups?: string[];
   activities?: Array<{ state: "running" | "complete" | "error"; summary: string; detail?: string }>;
+  /** Autonomous steps consumed so far, and the budget for this subagent. */
+  step?: number;
+  maxSteps?: number;
+  /** True while this subagent can still be stopped on its own. */
+  cancellable?: boolean;
 }
 
 export interface ToolApproval {

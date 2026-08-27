@@ -29,9 +29,11 @@ import {
   PERMISSION_POSTURES,
   permissionPosture,
   permissionPostureDefinition,
+  isPermissionPosture,
   type PermissionPosture,
+  type SkillJob,
 } from "@freebuff/agent-core";
-import type { PermissionPostureView } from "./shared/protocol";
+import type { PermissionPostureView, SkillJobView } from "./shared/protocol";
 import { planViewForSession } from "./runtime/plan-lifecycle";
 import { AgentRuntimeBridge, cachedModelsByProfile, modelIdsForProfile, pruneCachedModels } from "./runtime/bridge";
 import { SessionPersistenceCoordinator, type RestoredSession } from "./runtime/session-persistence";
@@ -344,6 +346,16 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           await this.setSelectedSkills(message.skillIds);
           this.postSkillState();
         });
+        return;
+      case "applySkillJob":
+        await this.enqueueSessionOperation(async () => {
+          await this.applySkillJob(message.skillId);
+        });
+        return;
+      case "cancelSubagent":
+        if (!this.runtime.cancelSubagent(this.sessionId, message.taskId)) {
+          this.post({ type: "notice", level: "info", message: "That subagent already finished." });
+        }
         return;
       case "cancelRun":
         this.runtime.cancel(this.sessionId);
@@ -1559,6 +1571,82 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
+   * Adopt a skill's declared job.
+   *
+   * A job is a request, not a grant. Each field is applied only where the
+   * active configuration permits it: a mode with a fixed model policy keeps its
+   * model, an unavailable mode or posture is reported rather than forced, and
+   * the skill is selected for the session either way. What actually changed is
+   * reported back, because a control that silently does nothing is worse than
+   * one that says why.
+   */
+  private async applySkillJob(skillId: string): Promise<void> {
+    const definition = this.skills.resolve(skillId);
+    const job = definition?.job;
+    if (!definition || !job) {
+      this.post({ type: "notice", level: "info", message: "That skill does not declare a job." });
+      return;
+    }
+
+    const applied: string[] = [];
+    const skipped: string[] = [];
+
+    if (job.mode) {
+      const requested = this.customModes.get(job.mode);
+      if (!requested || (requested.type !== "primary" && requested.type !== "all")) {
+        skipped.push(`mode '${job.mode}' is not installed`);
+      } else if (job.mode !== this.mode) {
+        this.mode = job.mode;
+        this.modeSelectionRequired = false;
+        this.acceptedModeSource = modeSourceKey(this.customModes.entry(this.mode));
+        this.post({ type: "modeChanged", mode: this.mode });
+        this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
+        await this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode });
+        applied.push(`mode ${requested.name}`);
+      }
+    }
+
+    if (job.posture && isPermissionPosture(job.posture) && job.posture !== this.posture) {
+      const before = this.posture;
+      await this.setPosture(job.posture, "user");
+      if (this.posture === job.posture) applied.push(`${permissionPostureDefinition(job.posture).label} posture`);
+      else skipped.push(`posture '${job.posture}' is unavailable here`);
+      void before;
+    }
+
+    if (job.model) {
+      const policy = this.runtime.modelPolicyState(this.mode);
+      if (policy.policy === "fixed") {
+        skipped.push(`model is fixed by ${this.mode}`);
+      } else if (job.model !== this.modelId) {
+        const previousModel = this.modelId;
+        this.modelId = job.model;
+        this.post({ type: "modelChanged", modelId: this.modelId });
+        await this.persistence.updateSessionSelection(this.sessionId, { modelId: this.modelId });
+        this.warnAboutMidConversationSwitch("model", previousModel, this.modelId);
+        applied.push(`model ${job.model}`);
+      }
+    }
+
+    const skillIds = await this.setSelectedSkills([...new Set([...this.currentSelectedSkillIds(), skillId])]);
+    void skillIds;
+    this.postSkillState();
+    this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId, this.mode) });
+
+    const summary = applied.length ? `Applied ${applied.join(", ")}.` : "Nothing needed changing.";
+    const caveat = skipped.length ? ` Skipped: ${skipped.join("; ")}.` : "";
+    this.post({
+      type: "notice",
+      level: skipped.length ? "warning" : "info",
+      message: `${definition.name} job ready. ${summary}${caveat}`,
+    });
+  }
+
+  private currentSelectedSkillIds(): string[] {
+    return this.context.workspaceState.get<Record<string, string[]>>(SESSION_SKILLS_STATE_KEY, {})[this.sessionId] ?? [];
+  }
+
+  /**
    * Postures offered to the user, with the ones that cannot take effect marked
    * rather than hidden. An unattended posture in an untrusted workspace is
    * silently inert — hard safety denies every mutation — so saying so is
@@ -1890,6 +1978,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           scope: skill.scope === "user" ? "global" : skill.scope,
           sourceKind: skill.sourceKind,
           ...(sourcePath ? { source: sourcePath } : {}),
+          ...(def?.job ? { job: skillJobView(def.job) } : {}),
         };
       }),
       selectedSkillIds: selectedSkillIds.slice(0, 20),
@@ -1931,6 +2020,18 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.freebuffSidecar.dispose();
     this.freebuffLog.dispose();
   }
+}
+
+/** Project a parsed skill job onto the UI contract, dropping anything invalid. */
+function skillJobView(job: SkillJob): SkillJobView {
+  return {
+    ...(job.mode ? { mode: job.mode } : {}),
+    ...(job.posture && isPermissionPosture(job.posture) ? { posture: job.posture } : {}),
+    ...(job.model ? { model: job.model } : {}),
+    ...(job.provider ? { provider: job.provider } : {}),
+    ...(job.filePatterns?.length ? { filePatterns: [...job.filePatterns] } : {}),
+    ...(job.subagents?.length ? { subagents: [...job.subagents] } : {}),
+  };
 }
 
 function modeSourceKey(entry: ReturnType<CustomModeStore["entry"]>): string | undefined {
@@ -2044,6 +2145,10 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
       return typeof message.slug === "string" && message.slug.length > 0 && message.slug.length <= 128;
     case "openModeDiagnostic":
       return typeof message.source === "string" && (message.line === undefined || (typeof message.line === "number" && Number.isSafeInteger(message.line)));
+    case "cancelSubagent":
+      return typeof message.taskId === "string" && message.taskId.length > 0 && message.taskId.length <= 256;
+    case "applySkillJob":
+      return typeof message.skillId === "string" && message.skillId.length > 0 && message.skillId.length <= 256;
     case "changePosture":
       return typeof message.posture === "string" && ["manual", "auto-edit", "plan", "auto"].includes(message.posture);
     case "saveDefaultMode":
