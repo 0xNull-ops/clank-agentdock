@@ -210,7 +210,7 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       break;
     case "settingsState":
       settingsState = message.state;
-      if (currentView === "settings") renderSettings();
+      if (currentView === "settings") render();
       break;
     case "providerTestResult":
       providerTestResults[message.profileId] = {
@@ -218,7 +218,7 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
         message: message.message,
         loading: false,
       };
-      if (currentView === "settings") renderSettings();
+      if (currentView === "settings") render();
       break;
     case "error":
       historyBusy = false;
@@ -935,6 +935,7 @@ function renderSettings(): void {
         ${settingsTab === "modes" ? renderModesTab() : settingsTab === "providers" ? renderProvidersTab() : renderGeneralTab()}
       </main>
     </section>`;
+  wireSettingsInteractions();
 }
 
 let isAddingProvider = false;
@@ -1496,7 +1497,8 @@ function wireChatInteractions(): void {
 }
 
 function wireSettingsInteractions(): void {
-  document.querySelectorAll<HTMLButtonElement>("[data-action=back-to-chat]").forEach((btn) => btn.addEventListener("click", () => {
+  document.querySelectorAll<HTMLButtonElement>("[data-action=back-to-chat]").forEach((btn) => btn.addEventListener("click", (event) => {
+    event.preventDefault();
     currentView = "chat";
     isAddingProvider = false;
     editingProfileId = null;
@@ -1505,8 +1507,10 @@ function wireSettingsInteractions(): void {
     render();
   }));
 
-  document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((btn) => btn.addEventListener("click", () => {
-    const tab = btn.dataset.tab as "modes" | "providers" | "general" | undefined;
+  document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((btn) => btn.addEventListener("click", (event) => {
+    event.preventDefault();
+    const target = (event.currentTarget as HTMLElement).closest<HTMLElement>("[data-tab]") ?? btn;
+    const tab = target.dataset.tab as "modes" | "providers" | "general" | undefined;
     if (tab) {
       settingsTab = tab;
       isAddingProvider = false;
