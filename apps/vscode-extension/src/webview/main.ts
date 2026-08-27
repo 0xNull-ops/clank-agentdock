@@ -554,7 +554,7 @@ function updateControlStrip(): void {
   const menuContainer = document.querySelector<HTMLElement>("#model-menu-container");
   if (menuContainer) {
     menuContainer.innerHTML = modelMenuOpen ? modelMenu() : "";
-    if (modelMenuOpen) wireModelPickerInteractions();
+    if (modelMenuOpen) wireModelDropdownInteractions();
   }
 
   const composerInput = document.querySelector<HTMLTextAreaElement>("#composer-input");
@@ -1358,6 +1358,8 @@ function renderProvidersTab(): string {
           <div class="freebuff-detected-info">
             <b>Local Freebuff Credentials Detected</b>
             <span>User: <strong>${escapeHtml(detected.name || detected.email || "Default")}</strong> ${detected.email && detected.name ? `(${escapeHtml(detected.email)})` : ""}</span>
+            <span>Active Model: <strong>${escapeHtml(detected.activeModel || "deepseek/deepseek-v4-flash")}</strong></span>
+            <small style="color: var(--forge-muted); font-size: 10px; margin-top: 2px;">Note: Freebuff allows 1 active session per account at a time.</small>
             <code>${escapeHtml(detected.source)}</code>
           </div>
         </div>
@@ -1366,8 +1368,7 @@ function renderProvidersTab(): string {
             ${sidecarStatus === "running" ? "↻ Sync Freebuff Models" : `⚡ Connect as ${escapeHtml(detected.name || "Detected User")} & Auto-Start`}
           </button>
           ${sidecarStatus === "running" ? `<button type="button" class="settings-action-btn secondary freebuff-stop-btn" data-action="toggle-freebuff-sidecar">■ Stop</button>` : ""}
-        </div>
-      ` : `
+        </div>` : `
         <div class="freebuff-cli-instruction">
           <p>Authenticate once in your terminal to enable automatic token discovery:</p>
           <div class="freebuff-cmd-box">
@@ -1793,8 +1794,9 @@ function modelMenu(): string {
 }
 
 function wireModelMenuItems(): void {
-  document.querySelectorAll<HTMLButtonElement>(".model-menu-item").forEach((btn) => {
+  document.querySelectorAll<HTMLButtonElement>("#model-menu-container .model-menu-item").forEach((btn) => {
     btn.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       const modelId = btn.dataset.modelId;
       if (modelId) {
@@ -1808,22 +1810,7 @@ function wireModelMenuItems(): void {
   });
 }
 
-function wireModelPickerInteractions(): void {
-  document.querySelector<HTMLButtonElement>("[data-action=toggle-model-picker]")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    modelMenuOpen = !modelMenuOpen;
-    historyOpen = false;
-    skillMenuOpen = false;
-    updateControlStrip();
-    if (modelMenuOpen) {
-      setTimeout(() => {
-        const search = document.querySelector<HTMLInputElement>("#model-search");
-        search?.focus();
-        search?.select();
-      }, 50);
-    }
-  });
-
+function wireModelDropdownInteractions(): void {
   const searchInput = document.querySelector<HTMLInputElement>("#model-search");
   searchInput?.addEventListener("input", (e) => {
     modelQuery = (e.target as HTMLInputElement).value;
@@ -1852,6 +1839,24 @@ function wireModelPickerInteractions(): void {
   });
 
   wireModelMenuItems();
+}
+
+function wireModelPickerToggle(): void {
+  document.querySelector<HTMLButtonElement>("[data-action=toggle-model-picker]")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    modelMenuOpen = !modelMenuOpen;
+    historyOpen = false;
+    skillMenuOpen = false;
+    updateControlStrip();
+    if (modelMenuOpen) {
+      setTimeout(() => {
+        const search = document.querySelector<HTMLInputElement>("#model-search");
+        search?.focus();
+        search?.select();
+      }, 50);
+    }
+  });
 
   if (!modelOutsideClickListenerAttached && typeof document !== "undefined" && typeof document.addEventListener === "function") {
     modelOutsideClickListenerAttached = true;
@@ -2115,7 +2120,7 @@ function wireChatInteractions(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-action=new]").forEach((btn) => {
     btn.addEventListener("click", () => startNewSession());
   });
-  wireModelPickerInteractions();
+  wireModelPickerToggle();
   for (const action of ["approve", "revise", "save", "discard"] as const) {
     document.querySelector<HTMLButtonElement>(`[data-action=plan-${action}]`)?.addEventListener("click", () => {
       if (!plan) return;
@@ -2272,6 +2277,13 @@ function wireSettingsInteractions(): void {
     btn.disabled = true;
     btn.textContent = "Connecting…";
     vscode.postMessage({ type: "setupFreebuff" });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=toggle-freebuff-sidecar]").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    btn.textContent = "Stopping…";
+    vscode.postMessage({ type: "toggleFreebuffSidecar" });
   }));
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=toggle-freebuff-manual]").forEach((btn) => btn.addEventListener("click", (e) => {

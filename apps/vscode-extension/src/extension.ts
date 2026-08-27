@@ -37,7 +37,7 @@ import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
 import { CustomModeStore } from "./runtime/custom-modes";
 import { SkillStore } from "./runtime/skills";
 import { providerPreset, providerPresets } from "./runtime/provider-presets";
-import { FreebuffSidecarManager, detectFreebuffCredentials } from "./runtime/freebuff-sidecar";
+import { FreebuffSidecarManager, detectFreebuffCredentials, FREEBUFF_REAL_MODELS } from "./runtime/freebuff-sidecar";
 import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActivityFromRecord, toolActivitiesFromSnapshot } from "./shared/session-history";
 
 const VIEW_ID = "agentdock.agentView";
@@ -435,8 +435,13 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             "Delete"
           );
           if (confirmed === "Delete") {
+            if (profile.id === "freebuff" || profile.id === "freebuff2api") {
+              this.freebuffSidecar.stop();
+            }
             await this.providerProfiles.deleteProfile(profile.id);
+            await this.refreshProviderSelection();
             await this.postSettingsState();
+            void vscode.window.showInformationMessage(`Deleted profile “${profile.name}”.`);
           }
         }
         return;
@@ -598,7 +603,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           return;
         }
         void vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `Starting Freebuff sidecar${detected?.name ? ` for ${detected.name}` : ""} & pulling models…` },
+          { location: vscode.ProgressLocation.Notification, title: `Starting Freebuff sidecar${detected?.name ? ` for ${detected.name}` : ""}…` },
           async () => {
             const startResult = await this.freebuffSidecar.start(token);
             if (!startResult.ok) {
@@ -608,6 +613,13 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             }
 
             const profileId = "freebuff";
+            const freebuffManualModels = FREEBUFF_REAL_MODELS.map((m) => ({
+              id: m.id,
+              displayName: `${m.displayName} (${m.category})`,
+              capabilities: { reasoning: m.hint.includes("reasoning"), tools: true },
+            }));
+            const defaultFreebuffModel = detected?.activeModel || "deepseek/deepseek-v4-flash";
+
             const existing = await this.providerProfiles.getProfile(profileId);
             if (!existing) {
               await this.providerProfiles.createProfile({
@@ -616,7 +628,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
                 type: "openai-compatible",
                 baseUrl: this.freebuffSidecar.getBaseUrl(),
                 headers: {},
-                manualModels: [],
+                defaultModel: defaultFreebuffModel,
+                manualModels: freebuffManualModels,
                 modeDefaults: {},
                 compatibility: {
                   supportsDeveloperRole: true,
@@ -629,6 +642,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             } else {
               await this.providerProfiles.updateProfile(profileId, {
                 baseUrl: this.freebuffSidecar.getBaseUrl(),
+                manualModels: freebuffManualModels,
+                defaultModel: existing.defaultModel || defaultFreebuffModel,
               });
             }
 
@@ -636,23 +651,14 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             await this.providerProfiles.setActiveProfile(profileId);
 
             try {
-              const fetched = await this.runtime.refreshModels(false, profileId, true);
-              if (fetched && fetched.length > 0) {
-                const currentProf = await this.providerProfiles.getProfile(profileId);
-                const hasValidDefault = currentProf?.defaultModel && fetched.some((m) => m.id === currentProf.defaultModel);
-                if (!hasValidDefault && fetched[0]) {
-                  await this.providerProfiles.updateProfile(profileId, { defaultModel: fetched[0].id });
-                }
-                void vscode.window.showInformationMessage(`Freebuff connected${detected?.name ? ` for ${detected.name}` : ""}! Discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"} (${fetched[0]?.id}).`);
-              } else {
-                void vscode.window.showInformationMessage(`Freebuff connected${detected?.name ? ` for ${detected.name}` : ""}!`);
-              }
-            } catch (err) {
-              void vscode.window.showWarningMessage(`Freebuff started, but model discovery encountered an error: ${err instanceof Error ? err.message : String(err)}`);
+              await this.runtime.refreshModels(false, profileId);
+            } catch {
+              // ignore
             }
 
             await this.refreshProviderSelection();
             await this.postSettingsState();
+            void vscode.window.showInformationMessage(`Freebuff connected${detected?.name ? ` for ${detected.name}` : ""}! Active model: ${defaultFreebuffModel}.`);
           }
         );
         return;
@@ -663,7 +669,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           this.freebuffSidecar.stop();
           void vscode.window.showInformationMessage("Freebuff sidecar stopped.");
         } else {
-          const token = (await this.providerProfiles.getApiKey("freebuff")) || "";
+          const detected = detectFreebuffCredentials();
+          const token = (await this.providerProfiles.getApiKey("freebuff")) || detected?.authToken || "";
           if (!token) {
             void vscode.window.showErrorMessage("No Freebuff authToken found. Please configure Freebuff first.");
             return;
@@ -1409,6 +1416,11 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
 
   private async activateProvider(profile: ProviderProfile): Promise<void> {
     await this.providerProfiles.setActiveProfile(profile.id);
+    try {
+      await this.runtime.refreshModels(false, profile.id);
+    } catch {
+      // ignore
+    }
     await this.refreshProviderSelection();
     void vscode.window.showInformationMessage(`${profile.name} is now active.`);
   }
@@ -1418,7 +1430,20 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     const profile = definition?.provider
       ? await this.providerProfiles.getProfile(definition.provider)
       : await this.providerProfiles.getActiveProfile();
-    const model = definition?.model ?? (profile ? resolveProfileModel(profile, { mode: this.mode }) : undefined);
+    let model = definition?.model ?? (profile ? resolveProfileModel(profile, { mode: this.mode }) : undefined);
+    if (!model && profile) {
+      if (profile.defaultModel) {
+        model = profile.defaultModel;
+      } else if (profile.manualModels.length > 0 && profile.manualModels[0]) {
+        model = profile.manualModels[0].id;
+      } else {
+        const cached = cachedModelsByProfile(this.context);
+        const profileModels = cached[profile.id] ?? [];
+        if (profileModels.length > 0 && profileModels[0]) {
+          model = profileModels[0].id;
+        }
+      }
+    }
     if (model) {
       this.modelId = model;
       await this.persistence.updateSessionSelection(this.sessionId, { modelId: model });

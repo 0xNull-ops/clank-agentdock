@@ -9,7 +9,42 @@ export interface DetectedFreebuffCredentials {
   name?: string;
   email?: string;
   source: string;
+  activeModel?: string;
 }
+
+export interface FreebuffModelDefinition {
+  id: string;
+  displayName: string;
+  category: "premium" | "unlimited";
+  hint: string;
+}
+
+export const FREEBUFF_REAL_MODELS: readonly FreebuffModelDefinition[] = Object.freeze([
+  {
+    id: "deepseek/deepseek-v4-flash",
+    displayName: "DeepSeek V4 Flash 07/31",
+    category: "unlimited",
+    hint: "unlimited · smart & fast · reasoning: high",
+  },
+  {
+    id: "mimo/mimo-v2.5",
+    displayName: "MiMo 2.5",
+    category: "unlimited",
+    hint: "unlimited · balanced · images",
+  },
+  {
+    id: "openai/gpt-5.6-luna",
+    displayName: "GPT-5.6 Luna",
+    category: "premium",
+    hint: "premium · strong all-around · reasoning: high · images",
+  },
+  {
+    id: "glm-5.3-flash",
+    displayName: "GLM 5.3 Flash",
+    category: "premium",
+    hint: "premium · deep reasoning · images",
+  },
+]);
 
 export function detectFreebuffCredentials(): DetectedFreebuffCredentials | undefined {
   const home = os.homedir();
@@ -19,6 +54,8 @@ export function detectFreebuffCredentials(): DetectedFreebuffCredentials | undef
     path.join(home, ".manicode", "credentials.json"),
     path.join(home, ".freebuff", "credentials.json"),
   ];
+
+  let detectedCreds: { authToken: string; name?: string; email?: string; source: string } | undefined;
 
   for (const credPath of candidatePaths) {
     if (fs.existsSync(credPath)) {
@@ -43,19 +80,47 @@ export function detectFreebuffCredentials(): DetectedFreebuffCredentials | undef
         }
 
         if (token && token.trim()) {
-          return {
+          detectedCreds = {
             authToken: token.trim(),
             name,
             email,
             source: credPath,
           };
+          break;
         }
       } catch {
         // continue
       }
     }
   }
-  return undefined;
+
+  if (!detectedCreds) return undefined;
+
+  // Check for active model in settings.json
+  let activeModel: string | undefined;
+  const settingsPaths = [
+    path.join(home, ".config", "manicode", "settings.json"),
+    path.join(home, ".config", "freebuff", "settings.json"),
+  ];
+  for (const sp of settingsPaths) {
+    if (fs.existsSync(sp)) {
+      try {
+        const raw = fs.readFileSync(sp, "utf8");
+        const json = JSON.parse(raw) as Record<string, unknown>;
+        if (typeof json.freebuffModel === "string" && json.freebuffModel.trim()) {
+          activeModel = json.freebuffModel.trim();
+          break;
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+
+  return {
+    ...detectedCreds,
+    activeModel: activeModel || "deepseek/deepseek-v4-flash",
+  };
 }
 
 export interface FreebuffSidecarConfig {
@@ -224,6 +289,11 @@ export class FreebuffSidecarManager {
         // ignore
       }
       this.child = undefined;
+    }
+    try {
+      child_process.execSync("pkill -f Freebuff2API || true", { stdio: "ignore" });
+    } catch {
+      // ignore
     }
     this.statusState = "stopped";
   }

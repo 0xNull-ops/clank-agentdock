@@ -199,6 +199,7 @@ export interface HarnessSettingsState {
     name?: string;
     email?: string;
     source: string;
+    activeModel?: string;
   };
 }
 
