@@ -698,6 +698,10 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         try {
           const fetched = await this.runtime.refreshModels(false, profileId, true);
           if (fetched && fetched.length > 0) {
+            const currentProf = await this.providerProfiles.getProfile(profileId);
+            if (currentProf && !currentProf.defaultModel && fetched[0]) {
+              await this.providerProfiles.updateProfile(profileId, { defaultModel: fetched[0].id });
+            }
             void vscode.window.showInformationMessage(`VibeProxy connected! Discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"}.`);
           } else {
             void vscode.window.showInformationMessage("VibeProxy profile created! (No live models returned yet; ensure an account is added in VibeProxy)");
@@ -1648,7 +1652,13 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
     case "importMode":
     case "reloadModes":
     case "openAdvancedSettings":
+    case "setupVibeProxy":
+    case "toggleFreebuffSidecar":
       return true;
+    case "openExternalUrl":
+      return typeof message.url === "string" && message.url.length > 0 && message.url.length <= 2048;
+    case "setupFreebuff":
+      return typeof message.authToken === "string" && message.authToken.length > 0 && message.authToken.length <= 4096;
     case "activateProvider":
     case "setProviderApiKey":
     case "clearProviderApiKey":
