@@ -297,16 +297,16 @@ function render(): void {
 function clankLogoSvg(size = 20): string {
   return `<svg width="${size}" height="${size}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M46 28 L24 50 L46 72" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M46 28 L51 34" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
-    <path d="M46 72 L51 66" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
+    <path d="M46 28 L51 34" stroke="#a1a1aa" stroke-width="7" stroke-linecap="round"/>
+    <path d="M46 72 L51 66" stroke="#a1a1aa" stroke-width="7" stroke-linecap="round"/>
     <path d="M54 28 L76 50 L54 72" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M54 28 L49 34" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
-    <path d="M54 72 L49 66" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
+    <path d="M54 28 L49 34" stroke="#a1a1aa" stroke-width="7" stroke-linecap="round"/>
+    <path d="M54 72 L49 66" stroke="#a1a1aa" stroke-width="7" stroke-linecap="round"/>
   </svg>`;
 }
 
 function clockIconSvg(size = 14): string {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#facc15" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <circle cx="12" cy="12" r="10"></circle>
     <polyline points="12 6 12 12 16 14"></polyline>
   </svg>`;
@@ -320,7 +320,7 @@ function gearIconSvg(size = 16): string {
 }
 
 function mapIconSvg(size = 18): string {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
     <line x1="8" y1="2" x2="8" y2="18"></line>
     <line x1="16" y1="6" x2="16" y2="22"></line>
@@ -328,14 +328,14 @@ function mapIconSvg(size = 18): string {
 }
 
 function compassIconSvg(size = 18): string {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <circle cx="12" cy="12" r="10"></circle>
-    <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" fill="#f97316" stroke="none"></polygon>
+    <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" fill="currentColor" stroke="none"></polygon>
   </svg>`;
 }
 
 function arrowRightSvg(size = 16): string {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <line x1="5" y1="12" x2="19" y2="12"></line>
     <polyline points="12 5 19 12 12 19"></polyline>
   </svg>`;
@@ -1215,7 +1215,7 @@ function renderProvidersTab(): string {
     <div class="vibeproxy-quick-setup-card">
       <div class="vibeproxy-quick-header">
         <div class="vibeproxy-title-row">
-          <span class="vibeproxy-badge">⚡ 1-Click Connect</span>
+          <span class="vibeproxy-badge">1-Click Connect</span>
           <span class="vibeproxy-title">VibeProxy (Port 8317)</span>
         </div>
       </div>
@@ -1224,7 +1224,7 @@ function renderProvidersTab(): string {
       </p>
       <div class="vibeproxy-action-row">
         <button type="button" class="settings-action-btn primary vibeproxy-connect-btn" data-action="connect-vibeproxy">
-          🚀 Connect VibeProxy & Pull Live Models
+          Connect VibeProxy &amp; Pull Live Models
         </button>
       </div>
     </div>
@@ -1232,7 +1232,7 @@ function renderProvidersTab(): string {
     <div class="freebuff-quick-setup-card">
       <div class="freebuff-quick-header">
         <div class="freebuff-title-row">
-          <span class="freebuff-badge">⚡ 1-Click Setup</span>
+          <span class="freebuff-badge">1-Click Setup</span>
           <span class="freebuff-title">Freebuff Quick Connect</span>
         </div>
         <span class="sidecar-status-pill ${sidecarStatus === "running" ? "running" : sidecarStatus === "error" ? "error" : "stopped"}">
@@ -1245,20 +1245,20 @@ function renderProvidersTab(): string {
       <form class="freebuff-setup-form" id="freebuff-setup-form">
         <div class="freebuff-step-row">
           <button type="button" class="freebuff-login-btn" data-action="open-freebuff-login">
-            🌐 1. Open Freebuff Login (freebuff.llm.pm)
+            1. Open Freebuff Login (freebuff.llm.pm)
           </button>
         </div>
         <div class="freebuff-step-row input-row">
           <input type="password" id="freebuff-token-input" class="setting-input" placeholder="2. Paste your Freebuff authToken here…" required />
           <button type="submit" class="settings-action-btn primary freebuff-connect-btn">
-            🚀 Connect & Auto-Start
+            Connect &amp; Auto-Start
           </button>
         </div>
       </form>
     </div>
 
     <div class="settings-actions-bar">
-      <button class="settings-action-btn primary full-width" data-action="add-profile">＋ Add Provider Profile</button>
+      <button class="settings-action-btn full-width" data-action="add-profile">＋ Add Provider Profile</button>
     </div>
 
     ${isAddingProvider ? renderProviderForm() : ""}
@@ -1444,28 +1444,14 @@ function emptyState(mode: string): string {
     <div class="empty-state">
       <div class="clank-hero-orb">
         <svg class="clank-orb-svg" viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <line x1="20" y1="140" x2="140" y2="20" stroke="url(#orangeStreak)" stroke-width="2.5" stroke-linecap="round"/>
-          <defs>
-            <linearGradient id="orangeStreak" x1="20" y1="140" x2="140" y2="20" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stop-color="#ea580c" stop-opacity="0"/>
-              <stop offset="30%" stop-color="#f97316" stop-opacity="0.95"/>
-              <stop offset="70%" stop-color="#f97316" stop-opacity="0.95"/>
-              <stop offset="100%" stop-color="#ea580c" stop-opacity="0"/>
-            </linearGradient>
-            <radialGradient id="orbGrad" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stop-color="#141d30"/>
-              <stop offset="70%" stop-color="#0a1020"/>
-              <stop offset="100%" stop-color="#040711"/>
-            </radialGradient>
-          </defs>
-          <circle cx="80" cy="80" r="48" fill="url(#orbGrad)" stroke="rgba(255,255,255,0.12)" stroke-width="1.2"/>
+          <circle cx="80" cy="80" r="48" fill="#121319" stroke="rgba(255,255,255,0.08)" stroke-width="1.2"/>
           <g transform="translate(80, 80) scale(0.68) translate(-50, -50)">
             <path d="M46 28 L24 50 L46 72" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M46 28 L51 34" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
-            <path d="M46 72 L51 66" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
+            <path d="M46 28 L51 34" stroke="#71717a" stroke-width="6" stroke-linecap="round"/>
+            <path d="M46 72 L51 66" stroke="#71717a" stroke-width="6" stroke-linecap="round"/>
             <path d="M54 28 L76 50 L54 72" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M54 28 L49 34" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
-            <path d="M54 72 L49 66" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
+            <path d="M54 28 L49 34" stroke="#71717a" stroke-width="6" stroke-linecap="round"/>
+            <path d="M54 72 L49 66" stroke="#71717a" stroke-width="6" stroke-linecap="round"/>
           </g>
         </svg>
       </div>
