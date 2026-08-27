@@ -1288,7 +1288,7 @@ function renderProvidersTab(): string {
         </span>
       </div>
       <p class="freebuff-quick-desc">
-        Access Freebuff models (GPT-5.6 Luna, DeepSeek v4, MiniMax, MiMo) directly with zero Docker or terminal setup.
+        Access Freebuff models dynamically via built-in Freebuff2API sidecar with zero terminal setup.
       </p>
       <form class="freebuff-setup-form" id="freebuff-setup-form">
         <div class="freebuff-step-row">

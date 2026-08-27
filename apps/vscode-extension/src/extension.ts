@@ -616,7 +616,6 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
                 baseUrl: this.freebuffSidecar.getBaseUrl(),
                 headers: {},
                 manualModels: [],
-                defaultModel: "gpt-5.6-luna",
                 modeDefaults: {},
                 compatibility: {
                   supportsDeveloperRole: true,
@@ -629,7 +628,6 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             } else {
               await this.providerProfiles.updateProfile(profileId, {
                 baseUrl: this.freebuffSidecar.getBaseUrl(),
-                defaultModel: existing.defaultModel || "gpt-5.6-luna",
               });
             }
 
@@ -639,7 +637,12 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             try {
               const fetched = await this.runtime.refreshModels(false, profileId, true);
               if (fetched && fetched.length > 0) {
-                void vscode.window.showInformationMessage(`Freebuff connected! Discovered ${fetched.length} models.`);
+                const currentProf = await this.providerProfiles.getProfile(profileId);
+                const hasValidDefault = currentProf?.defaultModel && fetched.some((m) => m.id === currentProf.defaultModel);
+                if (!hasValidDefault && fetched[0]) {
+                  await this.providerProfiles.updateProfile(profileId, { defaultModel: fetched[0].id });
+                }
+                void vscode.window.showInformationMessage(`Freebuff connected! Discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"} (${fetched[0]?.id}).`);
               }
             } catch (err) {
               void vscode.window.showWarningMessage(`Freebuff started, but model discovery encountered an error: ${err instanceof Error ? err.message : String(err)}`);
