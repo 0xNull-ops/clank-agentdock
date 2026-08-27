@@ -466,7 +466,7 @@ function renderChat(): void {
           <div class="skill-picker-container" id="skill-picker-container">${skillMenuOpen ? skillPicker() : ""}</div>
           <form class="composer" id="composer-form">
             <div class="composer-top-indicator" title="Connected"></div>
-            <textarea id="composer-input" rows="3" placeholder="Ask ${mode.label.toLowerCase()} anything…" aria-label="Message Clank"></textarea>
+            <textarea id="composer-input" rows="3" placeholder="${mode.id === "ask" ? "Ask anything…" : `Ask ${escapeHtml(mode.label)} anything…`}" aria-label="Message Clank"></textarea>
             <div class="composer-actions" id="composer-actions">
               <div class="composer-left-actions">${composerLeftActions()}</div>
               <div class="composer-right-actions">
@@ -1642,7 +1642,7 @@ function composerLeftActions(): string {
   const count = activeSkillIds().length;
   return `<button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
     <button type="button" class="image-btn" data-action="pick-image" aria-label="Attach image">📷 image</button>
-    <input type="file" id="image-file-input" accept="image/*" multiple style="display:none;" />
+    <input type="file" id="image-file-input" accept="image/*" multiple class="sr-only" style="display:none !important; position:absolute !important; width:0 !important; height:0 !important; opacity:0 !important; pointer-events:none !important;" />
     <button type="button" class="skill-btn ${skillMenuOpen ? "open" : ""}" data-action="skills" aria-label="Choose skills" aria-expanded="${skillMenuOpen}">✦ skills${count ? ` <span>${count}</span>` : ""}</button>`;
 }
 
