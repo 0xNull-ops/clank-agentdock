@@ -270,52 +270,61 @@ function render(): void {
     return;
   }
   renderChat();
-  wireChatInteractions();
 }
 
 function renderChat(): void {
   const mode = modes.find((item) => item.id === activeMode) ?? modes[0];
   const visibleModels = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
   
-  const workingIndicatorHtml = runState === "running"
-    ? `<div class="agent-working-indicator" id="agent-working-indicator"><span class="working-spinner">✦</span><span class="working-text">Agent is working…</span></div>`
-    : runState === "awaiting_approval"
-      ? `<div class="agent-working-indicator waiting" id="agent-working-indicator"><span class="working-spinner">!</span><span class="working-text">Waiting for approval…</span></div>`
-      : "";
+  const existingShell = Boolean(appRoot.innerHTML && appRoot.innerHTML.includes('id="chat-shell"'));
+  if (!existingShell) {
+    const workingIndicatorHtml = runState === "running"
+      ? `<div class="agent-working-indicator" id="agent-working-indicator"><span class="working-spinner">✦</span><span class="working-text">Agent is working…</span></div>`
+      : runState === "awaiting_approval"
+        ? `<div class="agent-working-indicator waiting" id="agent-working-indicator"><span class="working-spinner">!</span><span class="working-text">Waiting for approval…</span></div>`
+        : "";
 
-  const transcriptContent = timeline.length === 0
-    ? emptyState(mode.label)
-    : timeline.map(renderTimelineItem).join("") + workingIndicatorHtml;
+    const transcriptContent = timeline.length === 0
+      ? emptyState(mode.label)
+      : timeline.map(renderTimelineItem).join("") + workingIndicatorHtml;
 
-  appRoot.innerHTML = `
-    <section class="shell" id="chat-shell">
-      <header class="header">
-        <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><div><p class="eyebrow">FORGE / LOCAL HARNESS</p><h1>Agent chat</h1></div></div>
-        <div class="header-actions">
-          <button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}"><span class="session-picker-icon">◷</span><span class="session-picker-label" id="session-picker-label">${escapeHtml(activeSessionTitle())}</span><span class="session-picker-chevron">⌄</span></button>
-          <button class="icon-button" data-action="open-settings" aria-label="Open Agent Harness settings" title="Extension Settings">⚙</button>
-        </div>
-      </header>
-      <div id="session-menu-container">${historyOpen ? sessionMenu() : ""}</div>
-      <div class="control-strip" id="control-strip">
-        <label class="select-wrap mode-select" id="mode-select-wrap" title="${escapeHtml(`${mode.description} · ${mode.source ?? "unavailable"}`)}"><span class="mode-dot mode-${safeCssToken(mode.id)}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("")}</select><span class="chevron">⌄</span></label>
-        <label class="select-wrap model-select ${modelPolicy.policy}" id="model-select-wrap" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}"><span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span><span class="sr-only">Model</span><select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span></label>
-      </div>
-      <div class="rule"></div>
-      <section class="transcript" id="transcript" aria-live="polite">${transcriptContent}</section>
-      <footer class="composer-wrap">
-        <div class="context-chips" id="context-chips">${contextRefs.map(contextChip).join("")}</div>
-        <form class="composer" id="composer-form">
-          <textarea id="composer-input" rows="3" placeholder="Ask ${mode.label.toLowerCase()} anything…" aria-label="Message Agent Harness"></textarea>
-          <div class="composer-actions" id="composer-actions">
-            <button type="button" class="quiet-button" data-action="attach" aria-label="Attach context">＋ context</button>
-            <span class="composer-hint">⌘ ↵ to send</span>
-            ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="quiet-button cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
+    appRoot.innerHTML = `
+      <section class="shell" id="chat-shell">
+        <header class="header">
+          <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><div><p class="eyebrow">FORGE / LOCAL HARNESS</p><h1>Agent chat</h1></div></div>
+          <div class="header-actions">
+            <button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}"><span class="session-picker-icon">◷</span><span class="session-picker-label" id="session-picker-label">${escapeHtml(activeSessionTitle())}</span><span class="session-picker-chevron">⌄</span></button>
+            <button class="icon-button" data-action="open-settings" aria-label="Open Agent Harness settings" title="Extension Settings">⚙</button>
           </div>
-        </form>
-        <div class="composer-meta"><span><span class="live-dot"></span> local session</span><button type="button" class="text-button" data-action="new">new session</button></div>
-      </footer>
-    </section>`;
+        </header>
+        <div id="session-menu-container">${historyOpen ? sessionMenu() : ""}</div>
+        <div class="control-strip" id="control-strip">
+          <label class="select-wrap mode-select" id="mode-select-wrap" title="${escapeHtml(`${mode.description} · ${mode.source ?? "unavailable"}`)}"><span class="mode-dot mode-${safeCssToken(mode.id)}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("")}</select><span class="chevron">⌄</span></label>
+          <label class="select-wrap model-select ${modelPolicy.policy}" id="model-select-wrap" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}"><span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span><span class="sr-only">Model</span><select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span></label>
+        </div>
+        <div class="rule"></div>
+        <section class="transcript" id="transcript" aria-live="polite">${transcriptContent}</section>
+        <footer class="composer-wrap">
+          <div class="context-chips" id="context-chips">${contextRefs.map(contextChip).join("")}</div>
+          <form class="composer" id="composer-form">
+            <textarea id="composer-input" rows="3" placeholder="Ask ${mode.label.toLowerCase()} anything…" aria-label="Message Agent Harness"></textarea>
+            <div class="composer-actions" id="composer-actions">
+              <button type="button" class="quiet-button" data-action="attach" aria-label="Attach context">＋ context</button>
+              <span class="composer-hint">⌘ ↵ to send</span>
+              ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="quiet-button cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
+            </div>
+          </form>
+          <div class="composer-meta"><span><span class="live-dot"></span> local session</span><button type="button" class="text-button" data-action="new">new session</button></div>
+        </footer>
+      </section>`;
+    wireChatInteractions();
+  } else {
+    updateControlStrip();
+    updateSessionPicker();
+    updateContextChips();
+    renderTranscript();
+    updateRunStateUi();
+  }
 
   const transcript = document.querySelector<HTMLElement>("#transcript");
   if (transcript) transcript.scrollTop = transcript.scrollHeight;
@@ -327,11 +336,9 @@ function updateControlStrip(): void {
   if (modeSelect) {
     modeSelect.innerHTML = modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("");
     const wrap = document.querySelector<HTMLElement>("#mode-select-wrap");
-    if (wrap) {
-      wrap.title = `${mode.description} · ${mode.source ?? "unavailable"}`;
-      const dot = wrap.querySelector(".mode-dot");
-      if (dot) dot.className = `mode-dot mode-${safeCssToken(mode.id)}`;
-    }
+    if (wrap) wrap.title = `${mode.description} · ${mode.source ?? "unavailable"}`;
+    const dot = document.querySelector<HTMLElement>("#mode-select-wrap .mode-dot");
+    if (dot) dot.className = `mode-dot mode-${safeCssToken(mode.id)}`;
   }
 
   const visibleModels = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
@@ -343,11 +350,11 @@ function updateControlStrip(): void {
     if (wrap) {
       wrap.className = `select-wrap model-select ${modelPolicy.policy}`;
       wrap.title = modelPolicy.reason ?? `${modelPolicy.policy} model policy`;
-      const glyph = wrap.querySelector(".model-glyph");
-      if (glyph) glyph.textContent = modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈";
-      const chevron = wrap.querySelector(".chevron");
-      if (chevron) chevron.textContent = modelPolicy.policy === "fixed" ? "fixed" : "⌄";
     }
+    const glyph = document.querySelector<HTMLElement>("#model-select-wrap .model-glyph");
+    if (glyph) glyph.textContent = modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈";
+    const chevron = document.querySelector<HTMLElement>("#model-select-wrap .chevron");
+    if (chevron) chevron.textContent = modelPolicy.policy === "fixed" ? "fixed" : "⌄";
   }
 
   const composerInput = document.querySelector<HTMLTextAreaElement>("#composer-input");
@@ -376,8 +383,8 @@ function updateRunStateUi(): void {
       <span class="composer-hint">⌘ ↵ to send</span>
       ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="quiet-button cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
     `;
-    actions.querySelector("[data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
-    actions.querySelector("[data-action=attach]")?.addEventListener("click", () => vscode.postMessage({ type: "pickContext" }));
+    document.querySelector<HTMLButtonElement>("#composer-actions [data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
+    document.querySelector<HTMLButtonElement>("#composer-actions [data-action=attach]")?.addEventListener("click", () => vscode.postMessage({ type: "pickContext" }));
   }
 
   const transcript = document.querySelector<HTMLElement>("#transcript");
@@ -408,7 +415,7 @@ function updateRunStateUi(): void {
       workingEl.innerHTML = `<span class="working-spinner">!</span><span class="working-text">Waiting for approval…</span>`;
     }
   } else {
-    if (workingEl) workingEl.remove();
+    if (workingEl && typeof workingEl.remove === "function") workingEl.remove();
     // Finalize any streaming messages
     for (const item of timeline) {
       if (item.kind === "assistant_message" && item.isStreaming) {
@@ -426,8 +433,14 @@ function renderTranscript(): void {
 
   const mode = modes.find((item) => item.id === activeMode) ?? modes[0];
   if (timeline.length === 0) {
+    const existingEmpty = document.querySelector<HTMLElement>("#transcript .empty-state");
+    if (existingEmpty) {
+      const kicker = document.querySelector<HTMLElement>("#transcript .empty-state .kicker");
+      if (kicker) kicker.textContent = `${mode.label.toUpperCase()} MODE`;
+      return;
+    }
     transcript.innerHTML = emptyState(mode.label);
-    transcript.querySelectorAll<HTMLButtonElement>("[data-prompt]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelectorAll<HTMLButtonElement>("[data-prompt]").forEach((button) => button.addEventListener("click", () => {
       const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
       if (input) { input.value = button.dataset.prompt ?? ""; input.focus(); }
     }));

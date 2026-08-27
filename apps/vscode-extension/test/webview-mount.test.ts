@@ -63,7 +63,19 @@ function createHarness(options: { throwOnFirstRender?: boolean } = {}) {
   const documentStub = {
     querySelector: (selector: string) => {
       if (selector === "#app") return app;
-      return makeElement(selector);
+      const element = makeElement(selector);
+      if (selector === "#transcript") {
+        Object.defineProperty(element, "innerHTML", {
+          get: () => element._html,
+          set: (value: string) => {
+            element._html = value;
+            if (app._html.includes('id="transcript"')) {
+              app._html = app._html.replace(/(<section[^>]*id="transcript"[^>]*>)([\s\S]*?)(<\/section>)/, `$1${value}$3`);
+            }
+          },
+        });
+      }
+      return element;
     },
     querySelectorAll: () => [] as never[],
   };
