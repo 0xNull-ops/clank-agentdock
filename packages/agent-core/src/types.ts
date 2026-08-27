@@ -1,5 +1,7 @@
 /** Provider-independent contracts shared by the harness and its adapters. */
 
+import type { ModelResolutionInput } from "./model-resolution";
+
 export type PermissionEffect = "allow" | "ask" | "deny";
 
 export type ModeType = "primary" | "subagent" | "all";
@@ -293,6 +295,11 @@ export interface AgentLoopOptions {
   onEvent?: (event: AgentEvent) => void;
   initialMessages?: NormalizedMessage[];
   maxSteps?: number;
+  /** Optional profile/fallback availability inputs for the pure model resolver. */
+  modelResolution?: Omit<ModelResolutionInput, "mode" | "turnOverride" | "sessionSelection"> & {
+    turnOverride?: string | null;
+    sessionSelection?: string | null;
+  };
   model?: string;
 }
 

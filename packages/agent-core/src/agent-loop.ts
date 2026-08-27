@@ -11,6 +11,7 @@ import {
   ToolExecutionResult,
 } from "./types";
 import { globMatches, PermissionEngine } from "./permissions";
+import { resolveModel } from "./model-resolution";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, AgentTool>();
@@ -79,16 +80,27 @@ export async function runAgent(options: AgentLoopOptions): Promise<AgentRunResul
   if (systemPrompt) messages.unshift({ role: "system", content: systemPrompt });
   const effectivePermissionEngine = permissionEngine ?? new PermissionEngine({ mode: mode.permission });
   const emit = (event: AgentEvent): void => onEvent?.(event);
-  const fixedModel = mode.modelPolicy === "fixed";
-  const model = fixedModel ? mode.model : options.model ?? mode.model ?? session.modelId;
-  if (!model) {
-    const error = { message: `Mode ${mode.slug} has a fixed model policy but no model is configured.`, code: "FIXED_MODEL_MISSING", retryable: false };
+  const resolution = resolveModel({
+    ...options.modelResolution,
+    mode,
+    turnOverride: options.model ?? options.modelResolution?.turnOverride,
+    sessionSelection: options.modelResolution?.sessionSelection ?? session.modelId,
+  });
+  const model = resolution.selectedModel;
+  if (!model || !resolution.available) {
+    const error = {
+      message: !model
+        ? resolution.rejection?.reason ?? `No model is configured for mode ${mode.slug}.`
+        : `Model '${model}' is unavailable and no configured fallback is available.`,
+      code: !model ? "MODEL_NOT_CONFIGURED" : "MODEL_UNAVAILABLE",
+      retryable: false,
+    };
     emit({ type: "agent_error", sessionId: session.id, error });
     emit({ type: "session_completed", sessionId: session.id, status: "error" });
     return { status: "error", messages, steps: 0, error };
   }
-  if (fixedModel && options.model && options.model !== model) {
-    emit({ type: "model_override_rejected", sessionId: session.id, requestedModel: options.model, activeModel: model, reason: `Mode ${mode.name} requires the fixed model ${model}.` });
+  for (const rejection of resolution.rejections) {
+    emit({ type: "model_override_rejected", sessionId: session.id, requestedModel: rejection.model, activeModel: model, reason: rejection.reason });
   }
 
   emit({ type: "session_started", session: { ...session, status: "running", updatedAt: Date.now() } });

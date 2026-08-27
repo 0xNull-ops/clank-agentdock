@@ -9,6 +9,7 @@ import {
   type ContextRef,
   type ChatMessage,
   type ToolActivity,
+  type SubagentActivity,
   MODEL_OPTIONS
 } from "./shared/protocol";
 import { AgentRuntimeBridge } from "./runtime/bridge";
@@ -20,7 +21,7 @@ import {
   type ProviderProfile,
 } from "./runtime/provider-profiles";
 import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
-import { chatMessagesFromNormalized, sessionHistoryItemFromSession, toolActivitiesFromSnapshot } from "./shared/session-history";
+import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActivityFromRecord, toolActivitiesFromSnapshot } from "./shared/session-history";
 
 const VIEW_ID = "agentdock.agentView";
 const SESSION_LIST_LIMIT = 2_000;
@@ -34,8 +35,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const restored = recent ? await sessionPersistence.restore(recent.id) : undefined;
   const replayMessages = recent ? await sessionPersistence.replayMessages(recent.id) : undefined;
   const snapshot = recent ? await sessionPersistence.openSnapshot(recent.id) : undefined;
+  const restoredSubagents = recent ? (await sessionPersistence.listSubagentRuns(recent.id)).map(subagentActivityFromRecord) : [];
   const activeProfile = await providerProfiles.getActiveProfile();
-  const provider = new AgentViewProvider(context, sessionPersistence, providerProfiles, restored, replayMessages, snapshot ? toolActivitiesFromSnapshot(snapshot) : [], activeProfile ? resolveProfileModel(activeProfile, { mode: restored?.session.activeMode }) : undefined);
+  const provider = new AgentViewProvider(context, sessionPersistence, providerProfiles, restored, replayMessages, snapshot ? toolActivitiesFromSnapshot(snapshot) : [], restoredSubagents, activeProfile ? resolveProfileModel(activeProfile, { mode: restored?.session.activeMode }) : undefined);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true }
@@ -87,6 +89,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   private readonly runtime: AgentRuntimeBridge;
   private restoredMessages: ChatMessage[];
   private restoredTools: ToolActivity[];
+  private restoredSubagents: SubagentActivity[];
   private sessionOperations: Promise<void> = Promise.resolve();
   private readonly contextSnapshots = new Map<string, { ref: ContextRef; snapshot: string }>();
 
@@ -97,6 +100,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     restored?: RestoredSession,
     replayMessages?: NormalizedMessage[],
     restoredTools: ToolActivity[] = [],
+    restoredSubagents: SubagentActivity[] = [],
     initialModelId?: string,
   ) {
     const config = vscode.workspace.getConfiguration("agentdock");
@@ -107,6 +111,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.sessionId = restored?.session.id ?? `session-${Date.now().toString(36)}`;
     this.restoredMessages = restored ? chatMessagesFromNormalized(restored.messages) : [];
     this.restoredTools = restoredTools;
+    this.restoredSubagents = restoredSubagents;
     this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence, providerProfiles);
     if (restored) this.runtime.restoreHistory(restored.session.id, replayMessages ?? restored.messages);
   }
@@ -144,9 +149,11 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           sessionId: this.sessionId,
           mode: this.mode,
           modelId: this.modelId,
+          modelPolicy: this.runtime.modelPolicyState(this.mode),
           models: this.runtime.cachedModelOptions(this.modelId),
           messages: this.restoredMessages,
           tools: this.restoredTools,
+          subagents: this.restoredSubagents,
           workspaceName: vscode.workspace.name
         });
         await this.postSessionList();
@@ -163,11 +170,18 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             this.post({ type: "modelChanged", modelId: this.modelId });
           }
           this.post({ type: "modeChanged", mode: this.mode });
+          this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
           await this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode, ...(modeModel ? { modelId: modeModel } : {}) });
         });
         return;
       case "changeModel":
         await this.enqueueSessionOperation(async () => {
+          const policy = this.runtime.modelPolicyState(this.mode);
+          if (policy.policy === "fixed") {
+            this.post({ type: "modelPolicyChanged", modelPolicy: policy });
+            void vscode.window.showInformationMessage(policy.reason ?? "The active mode fixes its model.");
+            return;
+          }
           this.modelId = message.modelId;
           this.post({ type: "modelChanged", modelId: this.modelId });
           await this.persistence.updateSessionSelection(this.sessionId, { modelId: this.modelId });
@@ -246,8 +260,10 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       mode: this.mode,
       modelId: this.modelId,
       models: this.runtime.cachedModelOptions(this.modelId),
+      modelPolicy: this.runtime.modelPolicyState(this.mode),
       messages: [],
       tools: [],
+      subagents: [],
       workspaceName: vscode.workspace.name,
     });
     await this.postSessionList();
@@ -292,19 +308,23 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     // provider frames, while the webview receives only chatMessages below.
     const replayMessages = await this.persistence.replayMessages(sessionId);
     const snapshot = await this.persistence.openSnapshot(sessionId);
+    const restoredSubagents = (await this.persistence.listSubagentRuns(sessionId)).map(subagentActivityFromRecord);
     this.runtime.reset(previousSessionId);
     this.sessionId = restored.session.id;
     this.mode = normalizeMode(restored.session.activeMode);
     this.modelId = restored.session.modelId;
     this.restoredMessages = chatMessagesFromNormalized(restored.messages);
     this.restoredTools = snapshot ? toolActivitiesFromSnapshot(snapshot) : [];
+    this.restoredSubagents = restoredSubagents;
     this.contextSnapshots.clear();
     this.runtime.restoreHistory(this.sessionId, replayMessages);
     this.post({
       type: "sessionOpened",
       session: sessionHistoryItemFromSession(restored.session),
+      modelPolicy: this.runtime.modelPolicyState(this.mode),
       messages: this.restoredMessages,
       tools: this.restoredTools,
+      subagents: this.restoredSubagents,
     });
     this.post({ type: "runState", state: "idle" });
     await this.postSessionList();
@@ -601,6 +621,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: "modelChanged", modelId: model });
     }
     this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId) });
+    this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
   }
 
   private async fetchProviderModels(profile: ProviderProfile): Promise<unknown[]> {

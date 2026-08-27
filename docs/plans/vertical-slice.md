@@ -4,7 +4,9 @@ Deliver the smallest reliable VS Code agent-chat loop against a user-configured 
 
 # Current State
 
-Core, provider transport, and UI shell exist as separate typed modules. The remaining work is integration, hardening, and packaging.
+This original vertical-slice plan is complete. Later milestones added mutation tools,
+SQLite persistence, checkpoints, provider profiles, session management, model policies,
+and bounded subagents while preserving the composition boundaries described below.
 
 # Scope
 

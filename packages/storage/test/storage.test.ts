@@ -210,4 +210,92 @@ describe("SessionStore", () => {
       await expect(store.renameSession(session.id, "x".repeat(MAX_SESSION_TITLE_LENGTH + 1))).rejects.toThrow(String(MAX_SESSION_TITLE_LENGTH));
     });
   });
+
+  maybe("persists and updates scoped subagent run lifecycle with bounded result metadata", async () => {
+    await withStore(async (store, path) => {
+      await store.createSession(session);
+      const run = await store.createSubagentRun({
+        id: "subrun-1",
+        workspaceId: session.workspaceId,
+        sessionId: session.id,
+        parentSessionId: session.id,
+        parentTurnId: "turn-1",
+        parentRunId: "run-1",
+        turnId: "turn-child-1",
+        agent: "review",
+        taskSummary: "Review the authentication boundary",
+        status: "queued",
+        depth: 1,
+        providerId: "local",
+        modelId: "luna",
+        queuedAt: 1_100,
+      });
+      expect(run).toMatchObject({ id: "subrun-1", parentTurnId: "turn-1", status: "queued" });
+      expect(await store.getSubagentRun(run.id, { workspaceId: "other" })).toBeUndefined();
+      expect(await store.getSubagentRun(run.id, { workspaceId: session.workspaceId, sessionId: "other-session" })).toBeUndefined();
+      expect(await store.listSubagentRuns({ workspaceId: session.workspaceId, sessionId: session.id })).toHaveLength(1);
+
+      const completed = await store.updateSubagentRun(run.id, {
+        status: "completed",
+        startedAt: 1_101,
+        endedAt: 1_250,
+        result: {
+          summary: "Found one boundary concern.",
+          findings: [{ severity: "high", file: "src/auth.ts", lineStart: 42, title: "Missing guard" }],
+          filesInspected: ["src/auth.ts"],
+          filesChanged: [],
+          commandsRun: [{ command: "npm test", exitCode: 0, output: "passed" }],
+          followups: ["Add a regression test."],
+        },
+      }, { workspaceId: session.workspaceId, sessionId: session.id });
+      expect(completed?.status).toBe("completed");
+      expect(completed?.result?.findings?.[0].lineStart).toBe(42);
+
+      await store.close();
+      const reopened = await SessionStore.open({ filePath: path });
+      try {
+        expect(await reopened.getSubagentRun(run.id, { workspaceId: session.workspaceId, sessionId: session.id })).toMatchObject({
+          status: "completed",
+          providerId: "local",
+          result: { summary: "Found one boundary concern.", filesInspected: ["src/auth.ts"] },
+        });
+      } finally {
+        await reopened.close();
+      }
+    });
+  });
+
+  maybe("recovers queued and running subagent rows as cancelled on reopen", async () => {
+    await withStore(async (store, path) => {
+      await store.createSession(session);
+      await store.createSubagentRun({ id: "subrun-queued", workspaceId: session.workspaceId, sessionId: session.id, agent: "explore", taskSummary: "queued task", status: "queued", depth: 1, queuedAt: 1_101 });
+      await store.createSubagentRun({ id: "subrun-running", workspaceId: session.workspaceId, sessionId: session.id, agent: "general", taskSummary: "running task", status: "running", depth: 1, queuedAt: 1_102, startedAt: 1_103 });
+      await store.createSubagentRun({ id: "subrun-done", workspaceId: session.workspaceId, sessionId: session.id, agent: "review", taskSummary: "done task", status: "completed", depth: 1, queuedAt: 1_104, endedAt: 1_105 });
+      await store.close();
+      const reopened = await SessionStore.open({ filePath: path, now: () => 2_000 });
+      try {
+        expect(reopened.lastSubagentRunRecovery).toEqual(["subrun-queued", "subrun-running"]);
+        expect((await reopened.getSubagentRun("subrun-queued", { workspaceId: session.workspaceId }))?.status).toBe("cancelled");
+        expect((await reopened.getSubagentRun("subrun-running", { workspaceId: session.workspaceId }))?.status).toBe("cancelled");
+        expect((await reopened.getSubagentRun("subrun-running", { workspaceId: session.workspaceId }))?.endedAt).toBe(2_000);
+        expect((await reopened.getSubagentRun("subrun-done", { workspaceId: session.workspaceId }))?.status).toBe("completed");
+      } finally {
+        await reopened.close();
+      }
+    });
+  });
+
+  maybe("cascades subagent runs when their session is deleted", async () => {
+    await withStore(async (store) => {
+      await store.createSession(session);
+      await store.createSubagentRun({ id: "subrun-cascade", workspaceId: session.workspaceId, sessionId: session.id, agent: "test", taskSummary: "test task", status: "failed", depth: 1, queuedAt: 1_100 });
+      expect(await store.deleteSession(session.id, { workspaceId: session.workspaceId })).toBe(true);
+      expect(await store.getSubagentRun("subrun-cascade", { workspaceId: session.workspaceId })).toBeUndefined();
+
+      // The child identifier can be reused, proving the FK cascade removed it.
+      const replacement = { ...session, title: "Replacement" };
+      await store.createSession(replacement);
+      await expect(store.createSubagentRun({ id: "subrun-cascade", workspaceId: replacement.workspaceId, sessionId: replacement.id, agent: "test", taskSummary: "replacement task", status: "queued", depth: 1, queuedAt: 1_200 })).resolves.toMatchObject({ taskSummary: "replacement task" });
+    });
+  });
 });

@@ -118,4 +118,33 @@ describe("agent loop", () => {
     expect(assistants[0].providerMetadata).toEqual({ reasoning_content: "keep" });
     expect(assistants[0].providerFrames).toHaveLength(1);
   });
+
+  test("honors a preferred mode model before user overrides", async () => {
+    let request: any;
+    const provider = scriptedProvider([[{ type: "message_end", finishReason: "stop" }]]);
+    provider.streamChat = async function* (value) {
+      request = value;
+      yield { type: "message_end", finishReason: "stop" };
+    };
+    const mode = { ...implement, model: "preferred-model", modelPolicy: "preferred" as const };
+    await runAgent({ session, provider, mode, model: "turn-model", initialMessages: [{ role: "user", content: "go" }] });
+    expect(request.model).toBe("preferred-model");
+  });
+
+  test("uses a fixed mode model and emits a structured override rejection", async () => {
+    let request: any;
+    const events: any[] = [];
+    const provider = scriptedProvider([[{ type: "message_end", finishReason: "stop" }]]);
+    provider.streamChat = async function* (value) {
+      request = value;
+      yield { type: "message_end", finishReason: "stop" };
+    };
+    const mode = { ...implement, model: "luna-model", modelPolicy: "fixed" as const };
+    await runAgent({ session, provider, mode, model: "turn-model", onEvent: (event) => events.push(event) });
+    expect(request.model).toBe("luna-model");
+    expect(events.find((event) => event.type === "model_override_rejected")).toMatchObject({
+      requestedModel: "turn-model",
+      activeModel: "luna-model",
+    });
+  });
 });

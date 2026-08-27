@@ -69,6 +69,23 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .session-item:hover .session-item-actions, .session-item:focus-within .session-item-actions { display: flex; }
 .session-item-actions button { width: 23px; height: 23px; padding: 0; border: 0; border-radius: 4px; color: var(--forge-muted); background: transparent; cursor: pointer; }
 .session-item-actions button:hover { color: var(--forge-text); background: var(--forge-hover); }
+.subagent-card { margin: 10px 0; border: 1px solid var(--forge-border); border-left: 2px solid var(--forge-violet); border-radius: var(--forge-radius-md); background: var(--forge-raised); }
+.subagent-card summary { display: flex; align-items: center; gap: 9px; padding: 10px; list-style: none; cursor: pointer; }
+.subagent-card summary::-webkit-details-marker { display: none; }
+.subagent-icon { display: grid; flex: 0 0 22px; height: 22px; place-items: center; border-radius: 50%; color: var(--forge-violet); background: color-mix(in srgb, var(--forge-violet) 14%, transparent); font: 700 11px var(--forge-code); }
+.subagent-icon.running, .subagent-icon.queued { animation: pulse 1.4s ease-in-out infinite; }
+.subagent-icon.complete { color: var(--forge-green); background: color-mix(in srgb, var(--forge-green) 14%, transparent); }
+.subagent-icon.error { color: var(--forge-red); background: color-mix(in srgb, var(--forge-red) 14%, transparent); }
+.subagent-main { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.subagent-main b { font-size: 11px; text-transform: capitalize; }
+.subagent-main small { overflow: hidden; color: var(--forge-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-state { color: var(--forge-muted); font: 9px var(--forge-code); text-transform: uppercase; }
+.subagent-card > p, .subagent-card > ul, .subagent-files, .subagent-model { margin: 0 10px 10px 41px; color: var(--forge-text-secondary); font-size: 10px; line-height: 1.5; }
+.subagent-model { color: var(--forge-muted); font-family: var(--forge-code); }
+.subagent-files { display: flex; flex-wrap: wrap; gap: 4px; }
+.subagent-files span { width: 100%; color: var(--forge-muted); font: 9px var(--forge-code); text-transform: uppercase; }
+.subagent-files code { padding: 2px 4px; border-radius: 3px; background: var(--forge-surface); }
+.subagent-files.changed code { color: var(--forge-amber); }
 .session-empty { margin: 10px 7px; color: var(--forge-muted); font-size: 11px; }
 
 .control-strip { display: flex; gap: 8px; padding: 12px 16px 7px; }
@@ -80,6 +97,9 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .mode-dot { width: 7px; height: 7px; margin-left: 9px; border-radius: 50%; background: var(--forge-cyan); box-shadow: 0 0 8px currentColor; }
 .mode-dot.mode-ask { background: var(--forge-color-semantic-mode-ask); }.mode-dot.mode-plan { background: var(--forge-color-semantic-mode-plan); }.mode-dot.mode-architect { background: var(--forge-color-semantic-mode-architect); }.mode-dot.mode-implement { background: var(--forge-color-semantic-mode-implement); }.mode-dot.mode-debug { background: var(--forge-color-semantic-mode-debug); }.mode-dot.mode-review { background: var(--forge-color-semantic-mode-review); }.mode-dot.mode-orchestrate { background: var(--forge-color-semantic-mode-orchestrate); }.mode-dot.mode-custom { background: var(--forge-color-semantic-mode-custom); }
 .model-glyph { margin-left: 9px; color: var(--forge-violet); font-size: 12px; }.chevron { position: absolute; right: 8px; color: var(--forge-muted); pointer-events: none; font-size: 13px; transform: translateY(-1px); }
+.model-select.fixed { border-color: color-mix(in srgb, var(--forge-violet) 45%, var(--forge-border)); }
+.model-select.fixed .chevron { font: 8px var(--forge-code); letter-spacing: .04em; text-transform: uppercase; }
+.model-select select:disabled { cursor: not-allowed; opacity: .8; }
 .status-row { display: flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 16px 5px; color: var(--forge-muted); font-size: 11px; }.status-dot, .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--forge-green); }.status-dot.pulse { background: var(--forge-cyan); box-shadow: 0 0 10px var(--forge-cyan); animation: pulse 1.4s ease-in-out infinite; }.status-spacer { flex: 1; }.context-label strong { color: var(--forge-text-tertiary); font-weight: 500; }.context-track { width: 30px; height: 3px; overflow: hidden; border-radius: 9px; background: var(--forge-border); }.context-track span { display: block; height: 100%; border-radius: inherit; background: var(--forge-cyan); }
 .rule { position: relative; z-index: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--forge-border), transparent); }
 

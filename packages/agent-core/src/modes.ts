@@ -10,6 +10,7 @@ export const READ_TOOLS = [
   "get_diagnostics",
   "lsp",
   "semantic_search",
+  "task",
 ];
 export const IMPLEMENT_TOOLS = [...READ_TOOLS, "write_file", "edit_file", "apply_patch", "run_command"];
 const SAFE_READ_COMMANDS = {
@@ -68,6 +69,7 @@ function mode(partial: Pick<ModeDefinition, "name" | "slug" | "instructions" | "
   return {
     ...partial,
     type: partial.type ?? "primary",
+    modelPolicy: partial.modelPolicy ?? "user-selectable",
     skills: partial.skills ?? [],
     delegationAllowed: partial.delegationAllowed ?? false,
     allowedAgents: partial.allowedAgents ?? [],
@@ -89,7 +91,7 @@ export const BUILT_IN_MODES: readonly ModeDefinition[] = [
     delegationAllowed: true,
     allowedAgents: ["explore", "research", "test"],
     delegationEffects: "read-only",
-    permission: NO_WRITE,
+    permission: { ...NO_WRITE, task: "allow" },
   }),
   mode({
     name: "Plan",
@@ -140,7 +142,7 @@ export const BUILT_IN_MODES: readonly ModeDefinition[] = [
     steps: 40,
     tools: IMPLEMENT_TOOLS,
     delegationAllowed: true,
-    allowedAgents: ["explore", "research", "test", "implement"],
+    allowedAgents: ["explore", "research", "test", "review", "general", "implementer"],
     delegationEffects: "write",
     permission: {
       ...READ_PERMISSION,
@@ -205,7 +207,7 @@ export const BUILT_IN_MODES: readonly ModeDefinition[] = [
     steps: 60,
     tools: READ_TOOLS,
     delegationAllowed: true,
-    allowedAgents: ["explore", "research", "test", "implement"],
+    allowedAgents: ["explore", "research", "test", "review", "general", "implementer"],
     delegationEffects: "write",
     permission: { ...NO_WRITE, task: "allow" },
   }),

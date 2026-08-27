@@ -3,3 +3,5 @@ export * from "./permissions";
 export * from "./modes";
 export * from "./agent-loop";
 export * from "./prompts";
+export * from "./subagents";
+export * from "./model-resolution";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chatMessagesFromNormalized, sessionHistoryItemFromSession, toolActivitiesFromSnapshot } from "../src/shared/session-history";
+import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActivityFromRecord, toolActivitiesFromSnapshot } from "../src/shared/session-history";
 
 describe("session history UI mapping", () => {
   test("projects session metadata without exposing storage internals", () => {
@@ -49,5 +49,37 @@ describe("session history UI mapping", () => {
       state: "complete",
       detail: "done",
     }]);
+  });
+
+  test("projects durable subagent lifecycle metadata without provider frames", () => {
+    expect(subagentActivityFromRecord({
+      id: "subrun-1",
+      workspaceId: "workspace-a",
+      sessionId: "session-1",
+      agent: "implement",
+      taskSummary: "Apply the focused fix",
+      status: "failed",
+      depth: 1,
+      modelId: "model-a",
+      queuedAt: 10,
+      result: {
+        summary: "The child stopped after validation.",
+        filesInspected: ["src/index.ts"],
+        filesChanged: ["src/index.ts"],
+        followups: ["Run the integration suite."],
+        error: { code: "CHILD_RUN_ERROR", message: "validation failed" },
+      },
+    })).toEqual({
+      id: "subrun-1",
+      agent: "implementer",
+      task: "Apply the focused fix",
+      state: "error",
+      depth: 1,
+      modelId: "model-a",
+      summary: "The child stopped after validation.",
+      filesInspected: ["src/index.ts"],
+      filesChanged: ["src/index.ts"],
+      followups: ["Run the integration suite."],
+    });
   });
 });

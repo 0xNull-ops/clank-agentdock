@@ -26,15 +26,34 @@ import type {
   StoredMessage,
   StoredToolCall,
   StoredToolResult,
+  SubagentCommandMetadata,
+  SubagentFindingMetadata,
+  SubagentRunListOptions,
+  SubagentRunPatch,
+  SubagentRunRecord,
+  SubagentRunScopeOptions,
+  SubagentRunStatus,
+  SubagentResultMetadata,
   TranscriptOptions,
   UsageRecord,
 } from "./types";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 /** Maximum number of Unicode code points permitted in a session title. */
 export const MAX_SESSION_TITLE_LENGTH = 200;
+/** Maximum size of retained delegated-task result metadata. */
+export const MAX_SUBAGENT_RESULT_BYTES = 128_000;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2_000;
+const MAX_SUBAGENT_IDENTIFIER_LENGTH = 256;
+const MAX_SUBAGENT_AGENT_LENGTH = 128;
+const MAX_SUBAGENT_TASK_SUMMARY_LENGTH = 8_192;
+const MAX_SUBAGENT_RESULT_STRING_LENGTH = 4_096;
+const MAX_SUBAGENT_RESULT_ITEMS = 100;
+const MAX_SUBAGENT_FINDINGS = 50;
+const MAX_SUBAGENT_COMMANDS = 25;
+const MAX_SUBAGENT_RESULT_OUTPUT_LENGTH = 8_192;
+const MAX_SUBAGENT_DEPTH = 100;
 
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   {
@@ -172,6 +191,36 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
       );
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS subagent_runs (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        parent_session_id TEXT,
+        parent_turn_id TEXT,
+        parent_run_id TEXT,
+        turn_id TEXT,
+        agent TEXT NOT NULL,
+        task_summary TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'rejected')),
+        depth INTEGER NOT NULL,
+        provider_id TEXT,
+        model_id TEXT,
+        queued_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        result_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS subagent_runs_workspace_idx
+        ON subagent_runs(workspace_id, queued_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS subagent_runs_session_idx
+        ON subagent_runs(session_id, queued_at ASC, id ASC);
+      CREATE INDEX IF NOT EXISTS subagent_runs_parent_idx
+        ON subagent_runs(parent_run_id, queued_at ASC, id ASC);
+    `,
+  },
 ];
 
 function json(value: unknown): string | null {
@@ -223,6 +272,7 @@ export class SessionStore {
   private closed = false;
   private queue: Promise<unknown> = Promise.resolve();
   private recovery: RecoveryResult = { sessionIds: [], approvalIds: [] };
+  private recoveredSubagentRunIds: string[] = [];
 
   private constructor(db: SqlJsDatabase, options: SessionStoreOptions) {
     // sql.js deliberately rejects JavaScript `undefined` as a bind value;
@@ -251,7 +301,8 @@ export class SessionStore {
     // databases may have been opened with it disabled by another client.
     store.db.run("PRAGMA foreign_keys = ON");
     store.recovery = store.recoverInterruptedSessionsSync();
-    if (migrated || store.recovery.sessionIds.length > 0 || store.recovery.approvalIds.length > 0) {
+    store.recoveredSubagentRunIds = store.recoverInterruptedSubagentRunsSync();
+    if (migrated || store.recovery.sessionIds.length > 0 || store.recovery.approvalIds.length > 0 || store.recoveredSubagentRunIds.length > 0) {
       await store.persist();
     }
     return store;
@@ -262,6 +313,11 @@ export class SessionStore {
       sessionIds: [...this.recovery.sessionIds],
       approvalIds: [...this.recovery.approvalIds],
     };
+  }
+
+  /** IDs of queued/running delegated runs cancelled during the last open/recovery pass. */
+  public get lastSubagentRunRecovery(): string[] {
+    return [...this.recoveredSubagentRunIds];
   }
 
   public async flush(): Promise<void> {
@@ -299,6 +355,123 @@ export class SessionStore {
   public async getSession(sessionId: string, options: SessionScopeOptions = {}): Promise<AgentSession | undefined> {
     return this.enqueue(() => this.getSessionSync(sessionId, options.workspaceId));
   }
+
+  /** Persist a newly queued delegated run after validating its owning session. */
+  public async createSubagentRun(run: SubagentRunRecord): Promise<SubagentRunRecord> {
+    const normalized = normalizeSubagentRun(run);
+    return this.mutate(() => {
+      const session = this.getSessionSync(normalized.sessionId);
+      if (!session) throw new Error(`Session not found: ${normalized.sessionId}`);
+      if (session.workspaceId !== normalized.workspaceId) throw new Error("Subagent run workspace does not match its session.");
+      this.db.run(
+        `INSERT INTO subagent_runs
+          (id, workspace_id, session_id, parent_session_id, parent_turn_id, parent_run_id, turn_id,
+           agent, task_summary, status, depth, provider_id, model_id, queued_at, started_at, ended_at, result_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          normalized.id,
+          normalized.workspaceId,
+          normalized.sessionId,
+          normalized.parentSessionId,
+          normalized.parentTurnId,
+          normalized.parentRunId,
+          normalized.turnId,
+          normalized.agent,
+          normalized.taskSummary,
+          normalized.status,
+          normalized.depth,
+          normalized.providerId,
+          normalized.modelId,
+          normalized.queuedAt,
+          normalized.startedAt,
+          normalized.endedAt,
+          json(normalized.result),
+        ],
+      );
+      return normalized;
+    });
+  }
+
+  /** Read one delegated run, optionally guarded by workspace and session. */
+  public async getSubagentRun(id: string, options: SubagentRunScopeOptions): Promise<SubagentRunRecord | undefined> {
+    requireSubagentWorkspace(options.workspaceId);
+    return this.enqueue(() => this.subagentRunById(id, options));
+  }
+
+  /** List delegated runs in deterministic lifecycle order with optional scope/status filters. */
+  public async listSubagentRuns(options: SubagentRunListOptions): Promise<SubagentRunRecord[]> {
+    requireSubagentWorkspace(options.workspaceId);
+    return this.enqueue(() => {
+      const clauses: string[] = [];
+      const params: unknown[] = [];
+      if (options.workspaceId !== undefined) {
+        clauses.push("workspace_id = ?");
+        params.push(options.workspaceId);
+      }
+      if (options.sessionId !== undefined) {
+        clauses.push("session_id = ?");
+        params.push(options.sessionId);
+      }
+      const statuses = options.status === undefined
+        ? []
+        : Array.isArray(options.status) ? [...options.status] : [options.status];
+      if (statuses.length) {
+        clauses.push(`status IN (${statuses.map(() => "?").join(", ")})`);
+        params.push(...statuses);
+      }
+      const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+      return this.rows<SubagentRunRecord>(
+        `SELECT id, workspace_id, session_id, parent_session_id, parent_turn_id, parent_run_id, turn_id,
+                agent, task_summary, status, depth, provider_id, model_id, queued_at, started_at, ended_at, result_json
+           FROM subagent_runs ${where} ORDER BY queued_at ASC, id ASC LIMIT ?`,
+        [...params, limitOf(options.limit)],
+        (row) => this.subagentRunFromRow(row),
+      );
+    });
+  }
+
+  /** Update lifecycle, assignment, timestamps, or bounded result metadata for a delegated run. */
+  public async updateSubagentRun(
+    id: string,
+    patch: SubagentRunPatch,
+    options: SubagentRunScopeOptions,
+  ): Promise<SubagentRunRecord | undefined> {
+    requireSubagentWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      const existing = this.subagentRunByIdSync(id, options);
+      if (!existing) return undefined;
+      const normalized = normalizeSubagentRun({ ...existing, ...patch, id: existing.id, workspaceId: existing.workspaceId, sessionId: existing.sessionId });
+      this.db.run(
+        `UPDATE subagent_runs SET parent_session_id=?, parent_turn_id=?, parent_run_id=?, turn_id=?,
+          agent=?, task_summary=?, status=?, depth=?, provider_id=?, model_id=?, queued_at=?, started_at=?, ended_at=?, result_json=?
+         WHERE id=?`,
+        [
+          normalized.parentSessionId,
+          normalized.parentTurnId,
+          normalized.parentRunId,
+          normalized.turnId,
+          normalized.agent,
+          normalized.taskSummary,
+          normalized.status,
+          normalized.depth,
+          normalized.providerId,
+          normalized.modelId,
+          normalized.queuedAt,
+          normalized.startedAt,
+          normalized.endedAt,
+          json(normalized.result),
+          id,
+        ],
+      );
+      return normalized;
+    });
+  }
+
+  /** Short aliases for adapters that use CRUD verbs without the longer name. */
+  public createSubagent(run: SubagentRunRecord): Promise<SubagentRunRecord> { return this.createSubagentRun(run); }
+  public getSubagent(id: string, options: SubagentRunScopeOptions): Promise<SubagentRunRecord | undefined> { return this.getSubagentRun(id, options); }
+  public listSubagents(options: SubagentRunListOptions): Promise<SubagentRunRecord[]> { return this.listSubagentRuns(options); }
+  public updateSubagent(id: string, patch: SubagentRunPatch, options: SubagentRunScopeOptions): Promise<SubagentRunRecord | undefined> { return this.updateSubagentRun(id, patch, options); }
 
   /**
    * Rename a session and update its recency timestamp.
@@ -589,6 +762,23 @@ export class SessionStore {
     return { sessionIds, approvalIds };
   }
 
+  private recoverInterruptedSubagentRunsSync(): string[] {
+    const now = this.clock();
+    const ids = this.rows<{ id: string }>(
+      `SELECT id FROM subagent_runs WHERE status IN ('queued', 'running') ORDER BY queued_at, id`,
+      [],
+      (row) => ({ id: String(value(row, "id")) }),
+    ).map((item) => item.id);
+    if (ids.length) {
+      this.db.run(
+        `UPDATE subagent_runs SET status='cancelled', ended_at=?
+         WHERE status IN ('queued', 'running')`,
+        [now],
+      );
+    }
+    return ids;
+  }
+
   private migrate(): boolean {
     const current = this.currentSchemaVersion();
     if (current > SCHEMA_VERSION) throw new Error(`Session database schema ${current} is newer than supported schema ${SCHEMA_VERSION}.`);
@@ -655,6 +845,52 @@ export class SessionStore {
       workspaceId === undefined ? [sessionId] : [sessionId, workspaceId],
       (row) => this.sessionFromRow(row),
     )[0];
+  }
+
+  private subagentRunById(id: string, options: SubagentRunScopeOptions): SubagentRunRecord | undefined {
+    return this.subagentRunByIdSync(id, options);
+  }
+
+  private subagentRunByIdSync(id: string, options: SubagentRunScopeOptions): SubagentRunRecord | undefined {
+    const clauses = ["id=?"];
+    const params: unknown[] = [id];
+    if (options.workspaceId !== undefined) {
+      clauses.push("workspace_id=?");
+      params.push(options.workspaceId);
+    }
+    if (options.sessionId !== undefined) {
+      clauses.push("session_id=?");
+      params.push(options.sessionId);
+    }
+    return this.rows<SubagentRunRecord>(
+      `SELECT id, workspace_id, session_id, parent_session_id, parent_turn_id, parent_run_id, turn_id,
+              agent, task_summary, status, depth, provider_id, model_id, queued_at, started_at, ended_at, result_json
+         FROM subagent_runs WHERE ${clauses.join(" AND ")}`,
+      params,
+      (row) => this.subagentRunFromRow(row),
+    )[0];
+  }
+
+  private subagentRunFromRow(row: Record<string, unknown>): SubagentRunRecord {
+    return {
+      id: String(value(row, "id")),
+      workspaceId: String(value(row, "workspace_id")),
+      sessionId: String(value(row, "session_id")),
+      parentSessionId: nullableString(value(row, "parent_session_id")),
+      parentTurnId: nullableString(value(row, "parent_turn_id")),
+      parentRunId: nullableString(value(row, "parent_run_id")),
+      turnId: nullableString(value(row, "turn_id")),
+      agent: String(value(row, "agent")),
+      taskSummary: String(value(row, "task_summary")),
+      status: value(row, "status") as SubagentRunStatus,
+      depth: integer(value(row, "depth")),
+      providerId: nullableString(value(row, "provider_id")),
+      modelId: nullableString(value(row, "model_id")),
+      queuedAt: integer(value(row, "queued_at")),
+      startedAt: nullableInteger(value(row, "started_at")),
+      endedAt: nullableInteger(value(row, "ended_at")),
+      result: parseJson<SubagentResultMetadata>(value(row, "result_json")),
+    };
   }
 
   private sessionFromRow(row: Record<string, unknown>): AgentSession {
@@ -839,6 +1075,147 @@ function normalizeSessionTitle(title: string): string {
     throw new Error(`Session title must be at most ${MAX_SESSION_TITLE_LENGTH} characters.`);
   }
   return normalized;
+}
+
+function normalizeSubagentRun(run: SubagentRunRecord): SubagentRunRecord {
+  const id = requiredBoundedString(run.id, "Subagent run id", MAX_SUBAGENT_IDENTIFIER_LENGTH);
+  const workspaceId = requiredBoundedString(run.workspaceId, "Subagent run workspaceId", MAX_SUBAGENT_IDENTIFIER_LENGTH);
+  const sessionId = requiredBoundedString(run.sessionId, "Subagent run sessionId", MAX_SUBAGENT_IDENTIFIER_LENGTH);
+  const agent = requiredBoundedString(run.agent, "Subagent run agent", MAX_SUBAGENT_AGENT_LENGTH);
+  const taskSummary = requiredBoundedString(run.taskSummary, "Subagent task summary", MAX_SUBAGENT_TASK_SUMMARY_LENGTH);
+  if (!["queued", "running", "completed", "failed", "cancelled", "rejected"].includes(run.status)) {
+    throw new Error(`Invalid subagent run status: ${String(run.status)}`);
+  }
+  if (!Number.isSafeInteger(run.depth) || run.depth < 0 || run.depth > MAX_SUBAGENT_DEPTH) {
+    throw new Error(`Subagent run depth must be an integer between 0 and ${MAX_SUBAGENT_DEPTH}.`);
+  }
+  const normalized: SubagentRunRecord = {
+    id,
+    workspaceId,
+    sessionId,
+    agent,
+    taskSummary,
+    status: run.status,
+    depth: run.depth,
+    queuedAt: requiredTimestamp(run.queuedAt, "Subagent run queuedAt"),
+    ...(optionalBoundedString(run.parentSessionId, "parentSessionId", MAX_SUBAGENT_IDENTIFIER_LENGTH) ? { parentSessionId: optionalBoundedString(run.parentSessionId, "parentSessionId", MAX_SUBAGENT_IDENTIFIER_LENGTH) } : {}),
+    ...(optionalBoundedString(run.parentTurnId, "parentTurnId", MAX_SUBAGENT_IDENTIFIER_LENGTH) ? { parentTurnId: optionalBoundedString(run.parentTurnId, "parentTurnId", MAX_SUBAGENT_IDENTIFIER_LENGTH) } : {}),
+    ...(optionalBoundedString(run.parentRunId, "parentRunId", MAX_SUBAGENT_IDENTIFIER_LENGTH) ? { parentRunId: optionalBoundedString(run.parentRunId, "parentRunId", MAX_SUBAGENT_IDENTIFIER_LENGTH) } : {}),
+    ...(optionalBoundedString(run.turnId, "turnId", MAX_SUBAGENT_IDENTIFIER_LENGTH) ? { turnId: optionalBoundedString(run.turnId, "turnId", MAX_SUBAGENT_IDENTIFIER_LENGTH) } : {}),
+    ...(optionalBoundedString(run.providerId, "providerId", MAX_SUBAGENT_IDENTIFIER_LENGTH) ? { providerId: optionalBoundedString(run.providerId, "providerId", MAX_SUBAGENT_IDENTIFIER_LENGTH) } : {}),
+    ...(optionalBoundedString(run.modelId, "modelId", MAX_SUBAGENT_IDENTIFIER_LENGTH) ? { modelId: optionalBoundedString(run.modelId, "modelId", MAX_SUBAGENT_IDENTIFIER_LENGTH) } : {}),
+    ...(run.startedAt === undefined ? {} : { startedAt: requiredTimestamp(run.startedAt, "Subagent run startedAt") }),
+    ...(run.endedAt === undefined ? {} : { endedAt: requiredTimestamp(run.endedAt, "Subagent run endedAt") }),
+    ...(run.result === undefined ? {} : { result: normalizeSubagentResultMetadata(run.result) }),
+  };
+  return normalized;
+}
+
+function normalizeSubagentResultMetadata(input: unknown): SubagentResultMetadata {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Subagent result metadata must be an object.");
+  const source = input as Record<string, unknown>;
+  const summary = boundedString(source.summary, MAX_SUBAGENT_RESULT_OUTPUT_LENGTH) ?? "";
+  const findings = normalizeFindings(source.findings);
+  const commandsRun = normalizeCommands(source.commandsRun);
+  const normalized: SubagentResultMetadata = {
+    summary,
+    ...(findings.length ? { findings } : {}),
+    ...(stringArray(source.filesInspected, "result.filesInspected") ? { filesInspected: stringArray(source.filesInspected, "result.filesInspected") } : {}),
+    ...(stringArray(source.filesChanged, "result.filesChanged") ? { filesChanged: stringArray(source.filesChanged, "result.filesChanged") } : {}),
+    ...(commandsRun.length ? { commandsRun } : {}),
+    ...(stringArray(source.artifacts, "result.artifacts") ? { artifacts: stringArray(source.artifacts, "result.artifacts") } : {}),
+    ...(stringArray(source.followups, "result.followups") ? { followups: stringArray(source.followups, "result.followups") } : {}),
+    ...(normalizeResultError(source.error) ? { error: normalizeResultError(source.error) } : {}),
+  };
+  // The per-field bounds above make ordinary results small. Retain a final
+  // serialized-size guard so a future metadata field cannot turn this table
+  // into an unbounded transcript store.
+  if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > MAX_SUBAGENT_RESULT_BYTES) {
+    throw new Error(`Subagent result metadata must be at most ${MAX_SUBAGENT_RESULT_BYTES} bytes.`);
+  }
+  return normalized;
+}
+
+function normalizeFindings(valueToNormalize: unknown): SubagentFindingMetadata[] {
+  if (!Array.isArray(valueToNormalize)) return [];
+  return valueToNormalize.slice(0, MAX_SUBAGENT_FINDINGS).flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const source = item as Record<string, unknown>;
+    const finding: SubagentFindingMetadata = {};
+    for (const key of ["severity", "category", "file", "title", "explanation", "suggestedFix"] as const) {
+      const text = boundedString(source[key], MAX_SUBAGENT_RESULT_STRING_LENGTH);
+      if (text) finding[key] = text;
+    }
+    for (const key of ["lineStart", "lineEnd"] as const) {
+      if (Number.isSafeInteger(source[key]) && Number(source[key]) >= 0) finding[key] = Number(source[key]);
+    }
+    if (typeof source.confidence === "number" && Number.isFinite(source.confidence)) finding.confidence = Math.max(0, Math.min(1, source.confidence));
+    return [finding];
+  });
+}
+
+function normalizeCommands(valueToNormalize: unknown): SubagentCommandMetadata[] {
+  if (!Array.isArray(valueToNormalize)) return [];
+  return valueToNormalize.slice(0, MAX_SUBAGENT_COMMANDS).flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const source = item as Record<string, unknown>;
+    const command = boundedString(source.command, MAX_SUBAGENT_RESULT_STRING_LENGTH);
+    if (!command) return [];
+    const result: SubagentCommandMetadata = { command };
+    if (Number.isSafeInteger(source.exitCode)) result.exitCode = Number(source.exitCode);
+    const output = boundedString(source.output, MAX_SUBAGENT_RESULT_OUTPUT_LENGTH);
+    const error = boundedString(source.error, MAX_SUBAGENT_RESULT_OUTPUT_LENGTH);
+    if (output) result.output = output;
+    if (error) result.error = error;
+    return [result];
+  });
+}
+
+function normalizeResultError(input: unknown): { code: string; message: string } | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const source = input as Record<string, unknown>;
+  const code = boundedString(source.code, MAX_SUBAGENT_RESULT_STRING_LENGTH);
+  const message = boundedString(source.message, MAX_SUBAGENT_RESULT_OUTPUT_LENGTH);
+  return code && message ? { code, message } : undefined;
+}
+
+function stringArray(input: unknown, field: string): string[] | undefined {
+  if (input === undefined) return undefined;
+  if (!Array.isArray(input)) throw new Error(`Subagent ${field} must be an array.`);
+  return input.slice(0, MAX_SUBAGENT_RESULT_ITEMS).flatMap((item) => {
+    const normalized = boundedString(item, MAX_SUBAGENT_RESULT_STRING_LENGTH);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function requiredBoundedString(input: unknown, label: string, limit: number): string {
+  const normalized = boundedString(input, limit);
+  if (!normalized) throw new Error(`${label} must be non-empty and at most ${limit} characters.`);
+  return normalized;
+}
+
+function optionalBoundedString(input: unknown, field: string, limit: number): string | undefined {
+  if (input === undefined || input === null || input === "") return undefined;
+  return requiredBoundedString(input, `Subagent ${field}`, limit);
+}
+
+function boundedString(input: unknown, limit: number): string | undefined {
+  if (typeof input !== "string") return undefined;
+  const normalized = input.trim();
+  if (!normalized) return undefined;
+  if ([...normalized].length > limit) throw new Error(`Subagent metadata string must be at most ${limit} characters.`);
+  return normalized;
+}
+
+function requiredTimestamp(input: unknown, label: string): number {
+  if (typeof input !== "number" || !Number.isSafeInteger(input) || input < 0) throw new Error(`${label} must be a non-negative integer.`);
+  return input;
+}
+
+function requireSubagentWorkspace(workspaceId: string | undefined): asserts workspaceId is string {
+  if (typeof workspaceId !== "string" || !workspaceId.trim()) {
+    throw new Error("Subagent run operations require an explicit workspaceId scope.");
+  }
 }
 
 function escapeSql(input: string): string {

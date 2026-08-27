@@ -6,6 +6,7 @@ import type {
   PermissionRequest,
   ToolCallRecord,
   ToolExecutionResult,
+  SubagentError,
 } from "@freebuff/agent-core";
 
 export type StepStatus = "running" | "completed" | "cancelled" | "waiting_for_approval" | "error" | "max_steps";
@@ -108,6 +109,78 @@ export interface UsageRecord {
   totalTokens?: number;
   createdAt: number;
 }
+
+/** Durable lifecycle states for a delegated subagent run. */
+export type SubagentRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "rejected";
+
+/** Bounded, provider-neutral result data safe to retain with a run record. */
+export interface SubagentResultMetadata {
+  summary: string;
+  findings?: Array<SubagentFindingMetadata>;
+  filesInspected?: string[];
+  filesChanged?: string[];
+  commandsRun?: Array<SubagentCommandMetadata>;
+  artifacts?: string[];
+  followups?: string[];
+  error?: Pick<SubagentError, "code" | "message">;
+}
+
+export interface SubagentFindingMetadata {
+  severity?: string;
+  category?: string;
+  file?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  title?: string;
+  explanation?: string;
+  suggestedFix?: string;
+  confidence?: number;
+}
+
+export interface SubagentCommandMetadata {
+  command: string;
+  exitCode?: number;
+  output?: string;
+  error?: string;
+}
+
+/**
+ * Durable identity and bounded result metadata for one delegated task.
+ * `id` is the subagent run identifier; parent identifiers are optional for a
+ * root task and let callers reconstruct the delegation tree without copying
+ * the parent transcript.
+ */
+export interface SubagentRunRecord {
+  id: string;
+  workspaceId: string;
+  sessionId: string;
+  parentSessionId?: string;
+  parentTurnId?: string;
+  parentRunId?: string;
+  turnId?: string;
+  agent: string;
+  taskSummary: string;
+  status: SubagentRunStatus;
+  depth: number;
+  providerId?: string;
+  modelId?: string;
+  queuedAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  result?: SubagentResultMetadata;
+}
+
+export interface SubagentRunScopeOptions extends SessionScopeOptions {
+  workspaceId: string;
+  sessionId?: string;
+}
+
+export interface SubagentRunListOptions extends SubagentRunScopeOptions {
+  status?: SubagentRunStatus | readonly SubagentRunStatus[];
+  limit?: number;
+}
+
+export type SubagentRunPatch = Partial<Omit<SubagentRunRecord, "id" | "workspaceId" | "sessionId">>;
 
 export interface SessionSnapshot {
   session: AgentSession;

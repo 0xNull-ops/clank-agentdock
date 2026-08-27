@@ -43,9 +43,9 @@ stored in SQLite below VS Code global storage. The header history control can
 switch among recent workspace sessions without sending opaque replay state to
 the webview.
 
-Every runtime turn is bracketed by `CheckpointCoordinator.beginTurn` and
-`completeTurn` (also available as `runWithCheckpoint` for future mutating tool
-adapters). Changed turns produce a checkpoint card with file-level counts and
+Every primary runtime turn is bracketed by `CheckpointCoordinator.beginTurn`
+and `completeTurn`; approved write-capable subagent turns are additionally
+bracketed with `runWithCheckpoint`. Changed turns produce a checkpoint card with file-level counts and
 native VS Code diff/revert actions. Snapshot content is served through the
 `agentdock-checkpoint:` virtual-document scheme; revert refuses to overwrite
 workspace drift and reports the affected paths in the chat.

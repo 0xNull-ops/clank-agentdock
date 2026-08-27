@@ -102,6 +102,27 @@
           "default": "openai-compatible",
           "description": "Model id used when a new session starts. Configure the endpoint-specific id under Agent Harness › Provider: Model."
         },
+        "agentdock.subagents.maxConcurrent": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Maximum subagents that may run concurrently during one turn. Write-capable subagents are still serialized."
+        },
+        "agentdock.subagents.maxTotal": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Maximum total subagents accepted during one parent turn."
+        },
+        "agentdock.subagents.maxDepth": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Maximum delegation nesting depth. Increase to two for nested Orchestrate workflows."
+        },
         "agentdock.provider.baseUrl": {
           "type": "string",
           "default": "",

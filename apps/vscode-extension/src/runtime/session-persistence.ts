@@ -19,6 +19,8 @@ import {
   type SqlJsInitializer,
   type ProviderTranscriptEntry,
   type StoredMessage,
+  type SubagentRunPatch,
+  type SubagentRunRecord,
 } from "@freebuff/agent-storage";
 
 const DEFAULT_DATABASE_NAME = "sessions.sqlite";
@@ -264,6 +266,45 @@ export class SessionPersistenceCoordinator {
 
   public ensureSession(session: AgentSession): Promise<AgentSession> {
     return this.startSession(session);
+  }
+
+  /**
+   * Persist a delegated run through the same ordered queue as session events.
+   * The workspace check is intentionally performed here as well as in the
+   * storage layer so callers cannot accidentally create a UI-visible record
+   * for another workspace.
+   */
+  public async createSubagentRun(run: SubagentRunRecord): Promise<SubagentRunRecord> {
+    const workspaceId = this.workspaceId();
+    if (run.workspaceId !== workspaceId) {
+      throw new Error("Subagent run workspace does not match the current workspace.");
+    }
+    return this.enqueue(() => this.requireStore().then((store) => store.createSubagentRun(run)));
+  }
+
+  /** Update a delegated run while retaining its immutable workspace/session scope. */
+  public updateSubagentRun(
+    id: string,
+    patch: SubagentRunPatch,
+  ): Promise<SubagentRunRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.updateSubagentRun(id, patch, {
+      workspaceId: this.workspaceId(),
+    })));
+  }
+
+  /** Read one delegated run without crossing the current workspace boundary. */
+  public getSubagentRun(id: string): Promise<SubagentRunRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.getSubagentRun(id, {
+      workspaceId: this.workspaceId(),
+    })));
+  }
+
+  /** List all delegated runs for one session, including completed history. */
+  public listSubagentRuns(sessionId: string): Promise<SubagentRunRecord[]> {
+    return this.enqueue(() => this.requireStore().then((store) => store.listSubagentRuns({
+      workspaceId: this.workspaceId(),
+      sessionId,
+    })));
   }
 
   /** Persist header selection changes even when no provider run follows. */

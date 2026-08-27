@@ -50,6 +50,12 @@ export interface ModelOption {
   hint: string;
 }
 
+export interface ModelPolicyView {
+  policy: "fixed" | "preferred" | "user-selectable";
+  modelId?: string;
+  reason?: string;
+}
+
 /** UI-safe metadata for a recent workspace session. */
 export interface SessionHistoryItem {
   id: string;
@@ -62,17 +68,19 @@ export interface SessionHistoryItem {
 }
 
 export type ExtensionToUiMessage =
-  | { type: "initialize"; sessionId: string; mode: AgentMode; modelId: string; models: ModelOption[]; messages: ChatMessage[]; tools: ToolActivity[]; workspaceName?: string }
+  | { type: "initialize"; sessionId: string; mode: AgentMode; modelId: string; modelPolicy: ModelPolicyView; models: ModelOption[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; workspaceName?: string }
   | { type: "sessionList"; sessions: SessionHistoryItem[]; activeSessionId: string }
-  | { type: "sessionOpened"; session: SessionHistoryItem; messages: ChatMessage[]; tools: ToolActivity[] }
+  | { type: "sessionOpened"; session: SessionHistoryItem; modelPolicy: ModelPolicyView; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[] }
   | { type: "contextAdded"; ref: ContextRef }
   | { type: "modeChanged"; mode: AgentMode }
   | { type: "modelChanged"; modelId: string }
+  | { type: "modelPolicyChanged"; modelPolicy: ModelPolicyView }
   | { type: "modelsChanged"; models: ModelOption[] }
   | { type: "runState"; state: RunState; runId?: string }
   | { type: "textDelta"; runId: string; text: string }
   | { type: "assistantMessage"; message: ChatMessage }
   | { type: "toolCall"; tool: ToolActivity }
+  | { type: "subagentUpdate"; subagent: SubagentActivity }
   | { type: "approvalRequired"; approval: ToolApproval }
   | { type: "checkpointSummary"; checkpoint: CheckpointSummaryCard }
   | { type: "checkpointReverted"; checkpointId: string; summary: CheckpointSummaryCard }
@@ -93,6 +101,19 @@ export interface ToolActivity {
   summary: string;
   state: "running" | "complete" | "error";
   detail?: string;
+}
+
+export interface SubagentActivity {
+  id: string;
+  agent: "explore" | "general" | "test" | "review" | "research" | "implementer";
+  task: string;
+  state: "queued" | "running" | "complete" | "error" | "cancelled";
+  depth: number;
+  modelId?: string;
+  summary?: string;
+  filesInspected?: string[];
+  filesChanged?: string[];
+  followups?: string[];
 }
 
 export interface ToolApproval {

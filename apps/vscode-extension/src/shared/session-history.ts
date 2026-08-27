@@ -1,6 +1,6 @@
 import type { AgentSession, NormalizedContent, NormalizedMessage } from "@freebuff/agent-core";
-import type { SessionSnapshot } from "@freebuff/agent-storage";
-import type { AgentMode, ChatMessage, SessionHistoryItem, ToolActivity } from "./protocol";
+import type { SessionSnapshot, SubagentRunRecord } from "@freebuff/agent-storage";
+import type { AgentMode, ChatMessage, SessionHistoryItem, SubagentActivity, ToolActivity } from "./protocol";
 
 /** Project the storage/runtime session record into the webview-safe contract. */
 export function sessionHistoryItemFromSession(session: AgentSession): SessionHistoryItem {
@@ -50,6 +50,36 @@ export function toolActivitiesFromSnapshot(snapshot: SessionSnapshot): ToolActiv
       ...(result?.content ? { detail: result.content.slice(0, 32_000) } : {}),
     };
   });
+}
+
+/** Project durable, provider-neutral delegated-run metadata into a UI card. */
+export function subagentActivityFromRecord(record: SubagentRunRecord): SubagentActivity {
+  const agent = normalizeSubagentAgent(record.agent);
+  const state: SubagentActivity["state"] = record.status === "completed"
+    ? "complete"
+    : record.status === "failed" || record.status === "rejected"
+      ? "error"
+      : record.status;
+  const result = record.result;
+  return {
+    id: record.id,
+    agent,
+    task: record.taskSummary,
+    state,
+    depth: record.depth,
+    ...(record.modelId ? { modelId: record.modelId } : {}),
+    ...(result?.summary || result?.error?.message ? { summary: result.summary || result.error?.message } : {}),
+    ...(result?.filesInspected?.length ? { filesInspected: [...result.filesInspected] } : {}),
+    ...(result?.filesChanged?.length ? { filesChanged: [...result.filesChanged] } : {}),
+    ...(result?.followups?.length ? { followups: [...result.followups] } : {}),
+  };
+}
+
+function normalizeSubagentAgent(value: string): SubagentActivity["agent"] {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "implement") return "implementer";
+  const agents: SubagentActivity["agent"][] = ["explore", "general", "test", "review", "research", "implementer"];
+  return agents.includes(normalized as SubagentActivity["agent"]) ? normalized as SubagentActivity["agent"] : "general";
 }
 
 function textFromContent(content: NormalizedContent): string {

@@ -8,7 +8,9 @@ import type {
   CheckpointSummaryCard,
   UiToExtensionMessage,
   ModelOption,
-  SessionHistoryItem
+  ModelPolicyView,
+  SessionHistoryItem,
+  SubagentActivity,
 } from "../shared/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(message: UiToExtensionMessage): void };
@@ -39,10 +41,12 @@ let historyQuery = "";
 
 let activeMode: AgentMode = "ask";
 let activeModel = "openai-compatible";
+let modelPolicy: ModelPolicyView = { policy: "user-selectable" };
 let runState: "idle" | "running" | "awaiting_approval" | "complete" | "cancelled" | "error" = "idle";
 let contextRefs: ContextRef[] = [];
 let messages: ChatMessage[] = [];
 let tools: ToolActivity[] = [];
+let subagents: SubagentActivity[] = [];
 let approval: ToolApproval | undefined;
 let checkpoints: CheckpointSummaryCard[] = [];
 let checkpointConflict: { checkpointId: string; paths: string[]; message: string } | undefined;
@@ -55,9 +59,11 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       activeSessionId = message.sessionId;
       activeMode = message.mode;
       activeModel = message.modelId;
+      modelPolicy = message.modelPolicy;
       models = message.models;
       messages = message.messages;
       tools = message.tools;
+      subagents = message.subagents;
       contextRefs = [];
       break;
     case "sessionList":
@@ -69,8 +75,10 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       activeSessionId = message.session.id;
       activeMode = message.session.activeMode;
       activeModel = message.session.modelId;
+      modelPolicy = message.modelPolicy;
       messages = message.messages;
       tools = message.tools;
+      subagents = message.subagents;
       checkpoints = [];
       checkpointConflict = undefined;
       approval = undefined;
@@ -88,6 +96,9 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
     case "modelChanged":
       activeModel = message.modelId;
       break;
+    case "modelPolicyChanged":
+      modelPolicy = message.modelPolicy;
+      break;
     case "modelsChanged":
       models = message.models;
       break;
@@ -100,6 +111,9 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       break;
     case "toolCall":
       tools = [...tools.filter((tool) => tool.id !== message.tool.id), message.tool];
+      break;
+    case "subagentUpdate":
+      subagents = [...subagents.filter((item) => item.id !== message.subagent.id), message.subagent];
       break;
     case "approvalRequired":
       approval = message.approval;
@@ -145,12 +159,12 @@ function render(): void {
       ${historyOpen ? sessionMenu() : ""}
       <div class="control-strip">
         <label class="select-wrap mode-select"><span class="mode-dot mode-${mode.id}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${item.id}" ${item.id === activeMode ? "selected" : ""}>${item.label}</option>`).join("")}</select><span class="chevron">⌄</span></label>
-        <label class="select-wrap model-select"><span class="model-glyph">◈</span><span class="sr-only">Model</span><select id="model-select">${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">⌄</span></label>
+        <label class="select-wrap model-select ${modelPolicy.policy}" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}"><span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span><span class="sr-only">Model</span><select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span></label>
       </div>
       <div class="status-row"><span class="status-dot ${runState === "running" ? "pulse" : ""}"></span><span>${statusLabel()}</span><span class="status-spacer"></span><span class="context-label">Context <strong>12%</strong></span><span class="context-track"><span style="width:12%"></span></span></div>
       <div class="rule"></div>
       <section class="transcript" id="transcript" aria-live="polite">
-        ${messages.length === 0 && tools.length === 0 && checkpoints.length === 0 ? emptyState(mode.label) : `${messages.map(messageCard).join("")}${tools.map(toolCard).join("")}${checkpoints.map(checkpointCard).join("")}${approval ? approvalCard(approval) : ""}`}
+        ${messages.length === 0 && tools.length === 0 && subagents.length === 0 && checkpoints.length === 0 ? emptyState(mode.label) : `${messages.map(messageCard).join("")}${subagents.map(subagentCard).join("")}${tools.map(toolCard).join("")}${checkpoints.map(checkpointCard).join("")}${approval ? approvalCard(approval) : ""}`}
       </section>
       <footer class="composer-wrap">
         ${contextRefs.length ? `<div class="context-chips">${contextRefs.map(contextChip).join("")}</div>` : ""}
@@ -177,6 +191,14 @@ function messageCard(message: ChatMessage): string {
 function toolCard(tool: ToolActivity): string {
   const stateIcon = tool.state === "complete" ? "✓" : tool.state === "error" ? "!" : "◌";
   return `<details class="tool-card" ${tool.state === "running" ? "open" : ""}><summary><span class="tool-icon ${tool.state}">${stateIcon}</span><span><b>${escapeHtml(tool.name)}</b><small>${escapeHtml(tool.summary)}</small></span><span class="tool-state">${tool.state}</span></summary>${tool.detail ? `<pre>${escapeHtml(tool.detail)}</pre>` : ""}</details>`;
+}
+
+function subagentCard(item: SubagentActivity): string {
+  const icon = item.state === "complete" ? "✓" : item.state === "error" ? "!" : item.state === "cancelled" ? "×" : "↻";
+  const inspected = item.filesInspected?.length ? `<div class="subagent-files"><span>inspected</span>${item.filesInspected.slice(0, 8).map((file) => `<code>${escapeHtml(file)}</code>`).join("")}</div>` : "";
+  const changed = item.filesChanged?.length ? `<div class="subagent-files changed"><span>changed</span>${item.filesChanged.slice(0, 8).map((file) => `<code>${escapeHtml(file)}</code>`).join("")}</div>` : "";
+  const followups = item.followups?.length ? `<ul>${item.followups.slice(0, 5).map((followup) => `<li>${escapeHtml(followup)}</li>`).join("")}</ul>` : "";
+  return `<details class="subagent-card" ${item.state === "running" || item.state === "queued" ? "open" : ""}><summary><span class="subagent-icon ${item.state}">${icon}</span><span class="subagent-main"><span class="kicker">SUBAGENT · DEPTH ${item.depth}</span><b>${escapeHtml(item.agent)}</b><small>${escapeHtml(item.task)}</small></span><span class="subagent-state">${item.state}</span></summary>${item.modelId ? `<div class="subagent-model">model · ${escapeHtml(item.modelId)}</div>` : ""}${item.summary ? `<p>${escapeHtml(item.summary)}</p>` : ""}${inspected}${changed}${followups}</details>`;
 }
 
 function approvalCard(item: ToolApproval): string {
@@ -278,7 +300,7 @@ function wireInteractions(): void {
   document.querySelector<HTMLButtonElement>("[data-action=attach]")?.addEventListener("click", () => {
     vscode.postMessage({ type: "pickContext" });
   });
-  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; runState = "idle"; historyOpen = false; vscode.postMessage({ type: "newSession" }); render(); });
+  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; subagents = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; runState = "idle"; historyOpen = false; vscode.postMessage({ type: "newSession" }); render(); });
 }
 
 function sessionMenu(): string {

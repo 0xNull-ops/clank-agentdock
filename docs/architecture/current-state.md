@@ -19,7 +19,7 @@ Freebuff2API / MiniMax / custom endpoint
 ## Ownership
 
 - `apps/vscode-extension`: activation, settings, SecretStorage, workspace adapters, webview messaging, and presentation.
-- `packages/agent-core`: modes, permission resolution, tool registry, normalized messages/events, and the multi-step tool loop.
+- `packages/agent-core`: modes, model resolution, permission resolution, tool registry, normalized messages/events, the multi-step loop, and bounded subagent scheduling.
 - `packages/providers/openai-compatible`: HTTP/SSE transport, compatibility transforms, tool-call accumulation, and provider error normalization.
 - `specs`: normative product behavior and source design tokens.
 
@@ -39,18 +39,20 @@ Implemented in this milestone:
 - durable before/after checkpoints, persisted recent checkpoint descriptors,
   native virtual-document diffs, and guarded revert actions
 - durable SQLite sessions, crash recovery, provider replay state, and restored UI transcripts
+- searchable session history with rename, duplicate, delete, and safe export actions
+- fixed/preferred/user-selectable model policies with provider availability fallback
+- isolated subagent execution with per-turn concurrency/depth budgets, explicit write-spawn approval,
+  serialized child writers, durable lifecycle records, cancellation, and restored activity cards
 - guarded workspace reads/search, atomic write/edit/patch tools, bounded shell execution,
   command classification, and dedicated Git read tools
 - generated Forge CSS variables with VS Code dark, light, and high-contrast mappings
 
 Deliberately deferred until the vertical slice is hardened:
 
-- session-history browsing and transcript management UI
 - delete/move tools and a stronger command/network sandbox
-- crash-atomic multi-file patch and checkpoint restore journals
 - plan approval artifacts
 - custom-mode editor and full YAML validation
-- subagents, worktrees, MCP, semantic search, and workflow presets
+- isolated worktrees, MCP, semantic search, and workflow presets
 
 ## Invariants
 
