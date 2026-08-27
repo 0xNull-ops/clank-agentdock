@@ -61,17 +61,29 @@ export class OpenAICompatibleProvider implements LLMProvider {
   async listModels(signal?: AbortSignal): Promise<ModelInfo[]> {
     const response = await this.requestFetch(`${this.config.baseURL}/models`, { method: "GET", headers: this.headers(), signal });
     if (!response.ok) throw await this.httpError(response);
-    const body = await response.json() as { data?: Array<Record<string, unknown>> };
-    return (body.data ?? []).map((item) => {
-      const configured = this.config.models?.[String(item.id)] ?? {};
-      return {
-        ...DEFAULT_CAPABILITIES,
-        id: String(item.id),
-        providerId: this.id,
-        displayName: typeof configured.displayName === "string" ? configured.displayName : String(item.id),
-        ...configured,
-      } as ModelInfo;
-    });
+    const body = await response.json() as Record<string, unknown>;
+    const rawList: unknown[] = Array.isArray(body.data)
+      ? body.data
+      : Array.isArray(body.models)
+        ? body.models
+        : Array.isArray(body)
+          ? body
+          : [];
+    return rawList
+      .map((item: unknown) => {
+        const rawObj = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+        const id = String(rawObj.id || rawObj.name || rawObj.model || (typeof item === "string" ? item : "")).trim();
+        const displayName = String(rawObj.name || rawObj.displayName || id).trim();
+        const configured = this.config.models?.[id] ?? {};
+        return {
+          ...DEFAULT_CAPABILITIES,
+          id,
+          providerId: this.id,
+          displayName: typeof configured.displayName === "string" ? configured.displayName : displayName || id,
+          ...configured,
+        } as ModelInfo;
+      })
+      .filter((m) => m.id.length > 0);
   }
 
   async validateConfig(): Promise<ProviderValidation> {

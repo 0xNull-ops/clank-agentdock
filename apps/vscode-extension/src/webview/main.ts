@@ -1051,7 +1051,7 @@ function renderProvidersTab(): string {
               </div>
               <div class="profile-row">
                 <span>MODELS:</span>
-                <span>${profile.models.length} configured</span>
+                <span>${profile.models.length ? `${profile.models.length} available (${profile.models.slice(0, 3).map((m) => escapeHtml(m.id)).join(", ")}${profile.models.length > 3 ? `, +${profile.models.length - 3} more` : ""})` : "0 discovered (auto-discovers on API key save)"}</span>
               </div>
             </div>
 

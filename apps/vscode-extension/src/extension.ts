@@ -22,7 +22,7 @@ import {
   BUILT_IN_MODES,
 } from "./shared/protocol";
 import { planViewForSession } from "./runtime/plan-lifecycle";
-import { AgentRuntimeBridge } from "./runtime/bridge";
+import { AgentRuntimeBridge, cachedModelsByProfile } from "./runtime/bridge";
 import { SessionPersistenceCoordinator, type RestoredSession } from "./runtime/session-persistence";
 import {
   ProviderProfileStore,
@@ -333,6 +333,21 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           });
           if (key !== undefined) {
             await this.providerProfiles.setApiKey(profile.id, key.trim() || undefined);
+            if (key.trim()) {
+              try {
+                const fetched = await this.runtime.refreshModels(false, profile.id);
+                if (fetched && fetched.length > 0) {
+                  const updatedProfile = await this.providerProfiles.getProfile(profile.id);
+                  if (updatedProfile && !updatedProfile.defaultModel) {
+                    await this.providerProfiles.updateProfile(profile.id, { defaultModel: fetched[0]?.id });
+                  }
+                  void vscode.window.showInformationMessage(`Auto-discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"} for ${profile.name}.`);
+                }
+              } catch {
+                // Non-blocking background discovery
+              }
+            }
+            await this.refreshProviderSelection();
             await this.postSettingsState();
           }
         }
@@ -347,13 +362,19 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         const profile = await this.providerProfiles.getProfile(message.profileId);
         if (!profile) return;
         try {
-          const fetched = await this.fetchProviderModels(profile);
+          const fetched = await this.runtime.refreshModels(false, profile.id);
+          const count = fetched?.length ?? 0;
           this.post({
             type: "providerTestResult",
             profileId: message.profileId,
             success: true,
-            message: `Reachable (${fetched.length} model${fetched.length === 1 ? "" : "s"} found)`,
+            message: `Reachable (${count} model${count === 1 ? "" : "s"} discovered)`,
           });
+          if (fetched && fetched.length > 0 && !profile.defaultModel) {
+            await this.providerProfiles.updateProfile(profile.id, { defaultModel: fetched[0]?.id });
+          }
+          await this.refreshProviderSelection();
+          await this.postSettingsState();
         } catch (error) {
           this.post({
             type: "providerTestResult",
@@ -368,11 +389,14 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         const profile = await this.providerProfiles.getProfile(message.profileId);
         if (profile) {
           try {
-            const fetched = await this.fetchProviderModels(profile);
-            void vscode.window.showInformationMessage(`Found ${fetched.length} models for ${profile.name}.`);
+            const fetched = await this.runtime.refreshModels(true, profile.id);
+            if (fetched && fetched.length > 0 && !profile.defaultModel) {
+              await this.providerProfiles.updateProfile(profile.id, { defaultModel: fetched[0]?.id });
+            }
           } catch (error) {
             void vscode.window.showErrorMessage(`Failed to fetch models: ${error instanceof Error ? error.message : String(error)}`);
           }
+          await this.refreshProviderSelection();
           await this.postSettingsState();
         }
         return;
@@ -507,6 +531,21 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         if (input.apiKey !== undefined) {
           await this.providerProfiles.setApiKey(profileId, input.apiKey.trim() || undefined);
         }
+
+        // Auto-discover models upon adding or saving provider profile
+        try {
+          const fetched = await this.runtime.refreshModels(false, profileId);
+          if (fetched && fetched.length > 0) {
+            const updatedProfile = await this.providerProfiles.getProfile(profileId);
+            if (updatedProfile && !updatedProfile.defaultModel) {
+              await this.providerProfiles.updateProfile(profileId, { defaultModel: fetched[0]?.id });
+            }
+            void vscode.window.showInformationMessage(`Auto-discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"} for ${input.name.trim()}.`);
+          }
+        } catch {
+          // Non-blocking
+        }
+
         await this.refreshProviderSelection();
         await this.postSettingsState();
         void vscode.window.showInformationMessage(`Provider profile '${input.name.trim()}' saved.`);
@@ -1229,16 +1268,32 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       }
     }
     const activeId = await this.providerProfiles.getActiveProfileId();
+    const cachedByProfile = cachedModelsByProfile(this.context);
     const profiles: ProviderProfileView[] = await Promise.all(
       rawProfiles.map(async (p) => {
         const apiKey = await this.providerProfiles.getApiKey(p.id);
+        const cached = cachedByProfile[p.id] ?? [];
+        const seen = new Set<string>();
+        const models: { id: string; displayName?: string }[] = [];
+        for (const m of p.manualModels) {
+          if (!seen.has(m.id)) {
+            seen.add(m.id);
+            models.push({ id: m.id, displayName: m.displayName });
+          }
+        }
+        for (const c of cached) {
+          if (!seen.has(c.id)) {
+            seen.add(c.id);
+            models.push({ id: c.id, displayName: c.label });
+          }
+        }
         return {
           id: p.id,
           name: p.name,
           type: p.type,
           baseUrl: p.baseUrl,
           defaultModel: p.defaultModel,
-          models: p.manualModels.map((m) => ({ id: m.id, displayName: m.displayName })),
+          models,
           isActive: p.id === activeId,
           hasApiKey: Boolean(apiKey && apiKey.trim().length > 0),
         };

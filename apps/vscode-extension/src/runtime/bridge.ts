@@ -852,7 +852,7 @@ function activeProfileFromState(context: vscode.ExtensionContext, requestedId?: 
   return profiles.find((profile) => profile.id === requestedId) ?? profiles.find((profile) => profile.id === activeId) ?? profiles[0];
 }
 
-function cachedModelsByProfile(context: vscode.ExtensionContext): Record<string, ModelOption[]> {
+export function cachedModelsByProfile(context: vscode.ExtensionContext): Record<string, ModelOption[]> {
   const stored = context.globalState.get<unknown>(CACHED_MODELS_KEY, {});
   if (!stored || Array.isArray(stored) || typeof stored !== "object") return {};
   return stored as Record<string, ModelOption[]>;
