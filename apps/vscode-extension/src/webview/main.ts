@@ -396,7 +396,7 @@ function renderChat(): void {
             <div class="composer-actions" id="composer-actions">
               <button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
               <div class="composer-right-actions">
-                <span class="composer-hint"><span class="key-glyph">⌘</span> <span class="key-glyph">↵</span> to send</span>
+                <span class="composer-hint"><span class="key-glyph">↵</span> to send</span>
                 ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
               </div>
             </div>
@@ -472,7 +472,7 @@ function updateRunStateUi(): void {
     actions.innerHTML = `
       <button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
       <div class="composer-right-actions">
-        <span class="composer-hint"><span class="key-glyph">⌘</span> <span class="key-glyph">↵</span> to send</span>
+        <span class="composer-hint"><span class="key-glyph">↵</span> to send</span>
         ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
       </div>
     `;
@@ -1399,7 +1399,7 @@ function wireChatInteractions(): void {
     updateRunStateUi();
   });
   document.querySelector<HTMLTextAreaElement>("#composer-input")?.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       document.querySelector<HTMLFormElement>("#composer-form")?.requestSubmit();
     }
