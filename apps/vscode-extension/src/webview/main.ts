@@ -96,6 +96,10 @@ let mandatorySkillIds: string[] = [];
 let skillMenuOpen = false;
 let skillQuery = "";
 
+let modelMenuOpen = false;
+let modelQuery = "";
+let modelOutsideClickListenerAttached = false;
+
 let activeMode: AgentMode = "ask";
 let activeModel = "openai-compatible";
 let modelPolicy: ModelPolicyView = { policy: "user-selectable" };
@@ -455,13 +459,13 @@ function renderChat(): void {
             <select id="mode-select">${modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("")}</select>
             <span class="chevron">⌄</span>
           </label>
-          <label class="select-wrap model-select ${modelPolicy.policy}" id="model-select-wrap" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}">
+          <button type="button" class="model-picker-btn ${modelPolicy.policy} ${modelMenuOpen ? "open" : ""}" id="model-picker-btn" data-action="toggle-model-picker" ${modelPolicy.policy === "fixed" ? "disabled" : ""} title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}">
             <span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span>
-            <span class="sr-only">Model</span>
-            <select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select>
+            <span class="model-picker-label" id="model-picker-label">${escapeHtml(visibleModels.find((m) => m.id === activeModel)?.label || activeModel)}</span>
             <span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span>
-          </label>
+          </button>
         </div>
+        <div id="model-menu-container">${modelMenuOpen ? modelMenu() : ""}</div>
         <div class="status-row" id="status-row">
           <div class="status-left">
             <span class="status-dot ${runState === "running" ? "pulse" : ""}"></span>
@@ -515,24 +519,30 @@ function updateControlStrip(): void {
   }
 
   const visibleModels = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
-  const modelSelect = document.querySelector<HTMLSelectElement>("#model-select");
-  if (modelSelect) {
-    modelSelect.disabled = modelPolicy.policy === "fixed";
-    modelSelect.innerHTML = visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
-    const wrap = document.querySelector<HTMLElement>("#model-select-wrap");
-    if (wrap) {
-      wrap.className = `select-wrap model-select ${modelPolicy.policy}`;
-      wrap.title = modelPolicy.reason ?? `${modelPolicy.policy} model policy`;
-    }
-    const glyph = document.querySelector<HTMLElement>("#model-select-wrap .model-glyph");
-    if (glyph) glyph.textContent = modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈";
-    const chevron = document.querySelector<HTMLElement>("#model-select-wrap .chevron");
-    if (chevron) chevron.textContent = modelPolicy.policy === "fixed" ? "fixed" : "⌄";
+  const labelEl = document.querySelector<HTMLElement>("#model-picker-label");
+  if (labelEl) {
+    labelEl.textContent = visibleModels.find((m) => m.id === activeModel)?.label || activeModel;
+  }
+  const btnEl = document.querySelector<HTMLButtonElement>("#model-picker-btn");
+  if (btnEl) {
+    btnEl.className = `model-picker-btn ${modelPolicy.policy} ${modelMenuOpen ? "open" : ""}`;
+    btnEl.disabled = modelPolicy.policy === "fixed";
+    btnEl.title = modelPolicy.reason ?? `${modelPolicy.policy} model policy`;
+  }
+  const glyph = document.querySelector<HTMLElement>("#model-picker-btn .model-glyph");
+  if (glyph) glyph.textContent = modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈";
+  const chevron = document.querySelector<HTMLElement>("#model-picker-btn .chevron");
+  if (chevron) chevron.textContent = modelPolicy.policy === "fixed" ? "fixed" : "⌄";
+
+  const menuContainer = document.querySelector<HTMLElement>("#model-menu-container");
+  if (menuContainer) {
+    menuContainer.innerHTML = modelMenuOpen ? modelMenu() : "";
+    if (modelMenuOpen) wireModelPickerInteractions();
   }
 
   const composerInput = document.querySelector<HTMLTextAreaElement>("#composer-input");
   if (composerInput && !composerInput.value) {
-    composerInput.placeholder = `Ask ${mode.label.toLowerCase()} anything…`;
+    composerInput.placeholder = mode.id === "ask" ? "Ask anything…" : `Ask ${mode.label} anything…`;
   }
 }
 
@@ -1681,6 +1691,123 @@ function skillPicker(): string {
   </section>`;
 }
 
+function modelMenu(): string {
+  const visible = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
+  const q = modelQuery.trim().toLowerCase();
+  const filtered = q
+    ? visible.filter((m) => m.id.toLowerCase().includes(q) || (m.label && m.label.toLowerCase().includes(q)) || (m.hint && m.hint.toLowerCase().includes(q)))
+    : visible;
+
+  const items = filtered.length
+    ? filtered.map((m) => {
+        const isSelected = m.id === activeModel;
+        return `<button type="button" class="model-menu-item ${isSelected ? "selected" : ""}" data-model-id="${escapeHtml(m.id)}">
+          <span class="model-menu-radio">${isSelected ? "●" : "○"}</span>
+          <div class="model-menu-info">
+            <span class="model-menu-name">${escapeHtml(m.label || m.id)}</span>
+            ${m.hint ? `<span class="model-menu-hint">${escapeHtml(m.hint)}</span>` : ""}
+          </div>
+          ${isSelected ? `<span class="model-menu-check">✓</span>` : ""}
+        </button>`;
+      }).join("")
+    : `<div class="model-menu-empty">No models match “${escapeHtml(modelQuery)}”</div>`;
+
+  return `<div class="model-menu" id="model-menu" role="menu" aria-label="Choose Model">
+    <div class="model-menu-head">
+      <b>Select Model</b>
+      <span class="model-menu-count">${visible.length} available</span>
+    </div>
+    <div class="model-menu-search-wrap">
+      <input id="model-search" class="model-search" type="search" value="${escapeHtml(modelQuery)}" placeholder="Search ${visible.length} models (e.g. claude, gpt, deepseek)…" aria-label="Search models" autofocus />
+    </div>
+    <div class="model-menu-list">
+      ${items}
+    </div>
+  </div>`;
+}
+
+function wireModelMenuItems(): void {
+  document.querySelectorAll<HTMLButtonElement>(".model-menu-item").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const modelId = btn.dataset.modelId;
+      if (modelId) {
+        activeModel = modelId;
+        modelMenuOpen = false;
+        modelQuery = "";
+        vscode.postMessage({ type: "changeModel", modelId });
+        updateControlStrip();
+      }
+    });
+  });
+}
+
+function wireModelPickerInteractions(): void {
+  document.querySelector<HTMLButtonElement>("[data-action=toggle-model-picker]")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    modelMenuOpen = !modelMenuOpen;
+    historyOpen = false;
+    skillMenuOpen = false;
+    updateControlStrip();
+    if (modelMenuOpen) {
+      setTimeout(() => {
+        const search = document.querySelector<HTMLInputElement>("#model-search");
+        search?.focus();
+        search?.select();
+      }, 50);
+    }
+  });
+
+  const searchInput = document.querySelector<HTMLInputElement>("#model-search");
+  searchInput?.addEventListener("input", (e) => {
+    modelQuery = (e.target as HTMLInputElement).value;
+    const list = document.querySelector<HTMLElement>(".model-menu-list");
+    if (list) {
+      const visible = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
+      const q = modelQuery.trim().toLowerCase();
+      const filtered = q
+        ? visible.filter((m) => m.id.toLowerCase().includes(q) || (m.label && m.label.toLowerCase().includes(q)) || (m.hint && m.hint.toLowerCase().includes(q)))
+        : visible;
+      list.innerHTML = filtered.length
+        ? filtered.map((m) => {
+            const isSelected = m.id === activeModel;
+            return `<button type="button" class="model-menu-item ${isSelected ? "selected" : ""}" data-model-id="${escapeHtml(m.id)}">
+              <span class="model-menu-radio">${isSelected ? "●" : "○"}</span>
+              <div class="model-menu-info">
+                <span class="model-menu-name">${escapeHtml(m.label || m.id)}</span>
+                ${m.hint ? `<span class="model-menu-hint">${escapeHtml(m.hint)}</span>` : ""}
+              </div>
+              ${isSelected ? `<span class="model-menu-check">✓</span>` : ""}
+            </button>`;
+          }).join("")
+        : `<div class="model-menu-empty">No models match “${escapeHtml(modelQuery)}”</div>`;
+      wireModelMenuItems();
+    }
+  });
+
+  wireModelMenuItems();
+
+  if (!modelOutsideClickListenerAttached && typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    modelOutsideClickListenerAttached = true;
+    document.addEventListener("click", (e) => {
+      if (!modelMenuOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const isInside = target.closest(".model-menu") || target.closest("[data-action=toggle-model-picker]");
+      if (!isInside) {
+        modelMenuOpen = false;
+        updateControlStrip();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && modelMenuOpen) {
+        modelMenuOpen = false;
+        updateControlStrip();
+      }
+    });
+  }
+}
+
 function postSkillSelection(): void {
   vscode.postMessage({ type: "changeSkills", skillIds: selectedSkillIds });
 }
@@ -1937,6 +2064,13 @@ function wireChatInteractions(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-action=new]").forEach((btn) => {
     btn.addEventListener("click", () => startNewSession());
   });
+  document.querySelectorAll<HTMLButtonElement>("[data-action=toggle-theme]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      applyTheme(currentTheme === "beige" ? "charcoal" : "beige");
+      render();
+    });
+  });
+  wireModelPickerInteractions();
   for (const action of ["approve", "revise", "save", "discard"] as const) {
     document.querySelector<HTMLButtonElement>(`[data-action=plan-${action}]`)?.addEventListener("click", () => {
       if (!plan) return;
