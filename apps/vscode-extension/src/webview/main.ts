@@ -19,6 +19,8 @@ import type {
   ModeDetailView,
   CustomModeDiagnosticView,
   SkillOptionView,
+  PermissionPosture,
+  PermissionPostureView,
 } from "../shared/protocol";
 import { BUILT_IN_MODES } from "../shared/protocol";
 
@@ -73,7 +75,12 @@ type TimelineItem =
   | { kind: "user_message"; id: string; text: string; createdAt: number; images?: string[] }
   | { kind: "assistant_message"; id: string; text: string; createdAt: number; isStreaming?: boolean }
   | { kind: "system_message"; id: string; text: string; createdAt: number }
-  | { kind: "tool"; id: string; tool: ToolActivity }
+  /**
+   * Consecutive tool calls collapse into one group. Rendering each call as its
+   * own card buried the conversation under a wall of one-line entries.
+   */
+  | { kind: "tool_group"; id: string; tools: ToolActivity[] }
+  | { kind: "reasoning"; id: string; text: string; isStreaming?: boolean }
   | { kind: "subagent"; id: string; subagent: SubagentActivity }
   | { kind: "plan"; id: string; plan: PlanView }
   | { kind: "checkpoint"; id: string; checkpoint: CheckpointSummaryCard }
@@ -100,6 +107,24 @@ let modelMenuOpen = false;
 let modelQuery = "";
 let modelOutsideClickListenerAttached = false;
 let showFreebuffManualInput = false;
+
+/** Tool groups the reader has expanded or collapsed by hand; we stop auto-managing those. */
+const toolGroupsUserToggled = new Set<string>();
+let toolGroupSequence = 0;
+let reasoningSequence = 0;
+
+const POSTURE_GLYPH: Record<PermissionPosture, string> = {
+  manual: "\u270B",
+  "auto-edit": "\u2328",
+  plan: "\u2263",
+  auto: "\u26A1",
+};
+
+let posture: PermissionPosture = "manual";
+let postures: PermissionPostureView[] = [
+  { id: "manual", label: "Manual", description: "Ask before every edit and every command.", risk: "none", available: true },
+];
+let postureMenuOpen = false;
 
 let activeMode: AgentMode = "ask";
 let activeModel = "openai-compatible";
@@ -136,6 +161,8 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       selectedSkillIds = message.selectedSkillIds;
       mandatorySkillIds = message.mandatorySkillIds;
       plan = message.plan;
+      posture = message.posture ?? posture;
+      postures = Array.isArray(message.postures) ? message.postures : postures;
       contextRefs = [];
       rebuildTimeline(message.messages, message.tools, message.subagents, message.plan);
       appRoot.innerHTML = "";
@@ -158,6 +185,7 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       mandatorySkillIds = message.mandatorySkillIds;
       if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
       plan = message.plan;
+      posture = message.posture ?? posture;
       checkpoints = [];
       checkpointConflict = undefined;
       approval = undefined;
@@ -183,6 +211,14 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       break;
     case "modelChanged":
       activeModel = message.modelId;
+      updateControlStrip();
+      break;
+    case "reasoningDelta":
+      onReasoningDelta(message.stepId, message.text);
+      break;
+    case "postureChanged":
+      posture = message.posture ?? posture;
+      postures = Array.isArray(message.postures) ? message.postures : postures;
       updateControlStrip();
       break;
     case "modelPolicyChanged":
@@ -285,8 +321,10 @@ function rebuildTimeline(restoredMessages: ChatMessage[], restoredTools: ToolAct
       timeline.push({ kind: "system_message", id: msg.id, text: msg.text, createdAt: msg.createdAt });
     }
   }
-  for (const tool of restoredTools) {
-    timeline.push({ kind: "tool", id: tool.id, tool });
+  // Restored calls collapse into a single group, the same as a live run.
+  if (restoredTools.length > 0) {
+    toolGroupSequence += 1;
+    timeline.push({ kind: "tool_group", id: `toolgroup-restored-${toolGroupSequence}`, tools: [...restoredTools] });
   }
   for (const sub of restoredSubagents) {
     timeline.push({ kind: "subagent", id: sub.id, subagent: sub });
@@ -487,8 +525,10 @@ function renderChat(): void {
             <span class="model-picker-label" id="model-picker-label">${escapeHtml(visibleModels.find((m) => m.id === activeModel)?.label || activeModel)}</span>
             <span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span>
           </button>
+          ${posturePicker()}
         </div>
         <div id="model-menu-container">${modelMenuOpen ? modelMenu() : ""}</div>
+        <div id="posture-menu-container">${postureMenuOpen ? postureMenu() : ""}</div>
         <div class="status-row" id="status-row">
           <div class="status-left">
             <span class="status-dot ${runState === "running" ? "pulse" : ""}"></span>
@@ -562,6 +602,20 @@ function updateControlStrip(): void {
     menuContainer.innerHTML = modelMenuOpen ? modelMenu() : "";
     if (modelMenuOpen) wireModelDropdownInteractions();
   }
+
+  const postureBtn = document.querySelector<HTMLElement>("#posture-btn");
+  if (postureBtn) {
+    const active = postureView(posture);
+    postureBtn.className = `posture-btn risk-${active?.risk ?? "none"} ${postureMenuOpen ? "open" : ""}`;
+    postureBtn.setAttribute("aria-expanded", String(postureMenuOpen));
+    postureBtn.title = active ? `${active.label} — ${active.description} (Shift+Tab to cycle)` : "Permission mode";
+    const postureLabel = document.querySelector<HTMLElement>("#posture-label");
+    if (postureLabel) postureLabel.textContent = active?.label ?? "Manual";
+    const postureGlyph = document.querySelector<HTMLElement>("#posture-btn .posture-glyph");
+    if (postureGlyph) postureGlyph.textContent = POSTURE_GLYPH[posture] ?? "\u270B";
+  }
+  const postureMenuContainer = document.querySelector<HTMLElement>("#posture-menu-container");
+  if (postureMenuContainer) postureMenuContainer.innerHTML = postureMenuOpen ? postureMenu() : "";
 
   const composerInput = document.querySelector<HTMLTextAreaElement>("#composer-input");
   if (composerInput && !composerInput.value) {
@@ -735,8 +789,10 @@ function renderTimelineItem(item: TimelineItem): string {
         </div>
         <div class="message-body">${formatMarkdown(item.text)}</div>
       </article>`;
-    case "tool":
-      return toolCard(item.tool);
+    case "tool_group":
+      return toolGroupCard(item);
+    case "reasoning":
+      return reasoningCard(item);
     case "subagent":
       return subagentTree(item.subagent);
     case "plan":
@@ -809,6 +865,46 @@ function appendStreamingText(text: string): void {
   scrollToBottom();
 }
 
+/** Finalize any streaming assistant text before a non-text card is inserted. */
+function settleStreamingText(): void {
+  const lastItem = timeline[timeline.length - 1];
+  if (lastItem?.kind === "assistant_message" && lastItem.isStreaming) {
+    lastItem.isStreaming = false;
+    const bodyEl = document.querySelector<HTMLElement>(`#msg-${lastItem.id} .message-body`);
+    if (bodyEl) bodyEl.innerHTML = formatMarkdown(lastItem.text);
+  }
+  if (lastItem?.kind === "reasoning" && lastItem.isStreaming) {
+    lastItem.isStreaming = false;
+    replaceCard(`#reasoning-${safeCssToken(lastItem.id)}`, reasoningCard(lastItem));
+  }
+}
+
+/** Swap one already-rendered card for freshly generated markup. */
+function replaceCard(selector: string, html: string): boolean {
+  const existing = document.querySelector<HTMLElement>(selector);
+  if (!existing) return false;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = html;
+  const next = wrapper.firstElementChild;
+  if (!next) return false;
+  existing.replaceWith(next);
+  return true;
+}
+
+/** Append a freshly rendered card above the working indicator. */
+function appendCard(html: string): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = html;
+  const cardNode = wrapper.firstElementChild;
+  if (!cardNode) return;
+  const workingEl = document.querySelector("#agent-working-indicator");
+  if (workingEl) transcript.insertBefore(cardNode, workingEl);
+  else transcript.appendChild(cardNode);
+  scrollToBottom();
+}
+
 function onToolCall(tool: ToolActivity): void {
   const transcript = document.querySelector<HTMLElement>("#transcript");
   if (!transcript) return;
@@ -816,43 +912,66 @@ function onToolCall(tool: ToolActivity): void {
   const empty = transcript.querySelector(".empty-state");
   if (empty) empty.remove();
 
-  const existing = timeline.find((item) => item.kind === "tool" && item.id === tool.id);
-  if (existing && existing.kind === "tool") {
-    existing.tool = tool;
-    const existingEl = document.querySelector<HTMLElement>(`#tool-${safeCssToken(tool.id)}`);
-    if (existingEl) {
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = toolCard(tool);
-      if (wrapper.firstElementChild) {
-        existingEl.replaceWith(wrapper.firstElementChild);
-      }
-      return;
-    }
+  // A tool reports twice — running, then complete. Update the call in place;
+  // rendering each state as its own card is what produced the wall of entries.
+  for (const item of timeline) {
+    if (item.kind !== "tool_group") continue;
+    const index = item.tools.findIndex((candidate) => candidate.id === tool.id);
+    if (index < 0) continue;
+    item.tools[index] = tool;
+    if (!replaceCard(`#toolgroup-${safeCssToken(item.id)}`, toolGroupCard(item))) renderTranscript();
+    scrollToBottom();
+    return;
   }
 
-  // Finalize any in-flight streaming text before this tool
+  settleStreamingText();
+
+  // Consecutive calls join the open group so one turn reads as one block.
   const lastItem = timeline[timeline.length - 1];
-  if (lastItem && lastItem.kind === "assistant_message" && lastItem.isStreaming) {
-    lastItem.isStreaming = false;
-    const bodyEl = document.querySelector<HTMLElement>(`#msg-${lastItem.id} .message-body`);
-    if (bodyEl) bodyEl.innerHTML = formatMarkdown(lastItem.text);
+  if (lastItem?.kind === "tool_group") {
+    lastItem.tools.push(tool);
+    if (!replaceCard(`#toolgroup-${safeCssToken(lastItem.id)}`, toolGroupCard(lastItem))) renderTranscript();
+    scrollToBottom();
+    return;
   }
 
-  const newItem: TimelineItem = { kind: "tool", id: tool.id, tool };
-  timeline.push(newItem);
+  toolGroupSequence += 1;
+  const group: TimelineItem = { kind: "tool_group", id: `toolgroup-${toolGroupSequence}`, tools: [tool] };
+  timeline.push(group);
+  appendCard(toolGroupCard(group));
+}
 
-  const wrapper = document.createElement("div");
-  wrapper.innerHTML = toolCard(tool);
-  const cardNode = wrapper.firstElementChild;
-  if (cardNode) {
-    const workingEl = document.querySelector("#agent-working-indicator");
-    if (workingEl) {
-      transcript.insertBefore(cardNode, workingEl);
+/**
+ * Reasoning arrives as a stream of deltas keyed by step. Each step becomes one
+ * collapsed card so a long chain of thought never pushes the answer off screen.
+ */
+function onReasoningDelta(stepId: string, text: string): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+
+  const empty = transcript.querySelector(".empty-state");
+  if (empty) empty.remove();
+
+  const lastItem = timeline[timeline.length - 1];
+  if (lastItem?.kind === "reasoning" && lastItem.isStreaming && lastItem.id === `reasoning-${stepId}`) {
+    lastItem.text += text;
+    const body = document.querySelector<HTMLElement>(`#reasoning-${safeCssToken(lastItem.id)} .reasoning-body`);
+    if (body) {
+      body.textContent = lastItem.text;
+      const summaryCount = document.querySelector<HTMLElement>(`#reasoning-${safeCssToken(lastItem.id)} .reasoning-main small`);
+      const words = lastItem.text.trim().split(/\s+/).filter(Boolean).length;
+      if (summaryCount) summaryCount.textContent = `${words} word${words === 1 ? "" : "s"}`;
     } else {
-      transcript.appendChild(cardNode);
+      replaceCard(`#reasoning-${safeCssToken(lastItem.id)}`, reasoningCard(lastItem));
     }
+    return;
   }
-  scrollToBottom();
+
+  settleStreamingText();
+  reasoningSequence += 1;
+  const item: TimelineItem = { kind: "reasoning", id: `reasoning-${stepId || reasoningSequence}`, text, isStreaming: true };
+  timeline.push(item);
+  appendCard(reasoningCard(item));
 }
 
 function onAssistantMessage(msg: ChatMessage): void {
@@ -1791,9 +1910,103 @@ function messageCard(message: ChatMessage): string {
   return `<article class="message ${message.role}"><div class="message-label">${message.role === "user" ? "YOU" : message.role === "system" ? "SYSTEM" : "AGENT"}</div><div class="message-body">${escapeHtml(message.text).replace(/\n/g, "<br>")}</div></article>`;
 }
 
-function toolCard(tool: ToolActivity): string {
-  const stateIcon = tool.state === "complete" ? "✓" : tool.state === "error" ? "!" : "◌";
-  return `<details class="tool-card" ${tool.state === "running" ? "open" : ""}><summary><span class="tool-icon ${tool.state}">${stateIcon}</span><span><b>${escapeHtml(tool.name)}</b><small>${escapeHtml(tool.summary)}</small></span><span class="tool-state">${tool.state}</span></summary>${tool.detail ? `<pre>${escapeHtml(tool.detail)}</pre>` : ""}</details>`;
+function postureView(id: PermissionPosture): PermissionPostureView | undefined {
+  return postures.find((item) => item.id === id);
+}
+
+/** The third control: role, model, then how much the agent asks. */
+function posturePicker(): string {
+  const active = postureView(posture);
+  const label = active?.label ?? "Manual";
+  const risk = active?.risk ?? "none";
+  const title = active ? `${active.label} — ${active.description} (Shift+Tab to cycle)` : "Permission mode";
+  return `<button type="button" class="posture-btn risk-${risk} ${postureMenuOpen ? "open" : ""}" id="posture-btn" data-action="toggle-posture-picker" aria-haspopup="menu" aria-expanded="${postureMenuOpen}" title="${escapeHtml(title)}">
+    <span class="posture-glyph">${POSTURE_GLYPH[posture] ?? "\u270B"}</span>
+    <span class="posture-label" id="posture-label">${escapeHtml(label)}</span>
+    <span class="chevron">\u2304</span>
+  </button>`;
+}
+
+function postureMenu(): string {
+  const options = postures.length ? postures : [{ id: "manual" as const, label: "Manual", description: "Ask before every edit and every command.", risk: "none" as const, available: true }];
+  return `<div class="posture-menu" role="menu">
+    <div class="posture-menu-head"><span class="kicker">PERMISSION MODE</span><span class="posture-menu-hint">\u21E7 + tab to switch</span></div>
+    ${options.map((option) => `
+      <button type="button" role="menuitemradio" aria-checked="${option.id === posture}" class="posture-option ${option.id === posture ? "active" : ""} ${option.available ? "" : "unavailable"}" data-posture="${escapeHtml(option.id)}" ${option.available ? "" : "disabled"} title="${escapeHtml(option.unavailableReason ?? option.description)}">
+        <span class="posture-option-glyph">${POSTURE_GLYPH[option.id] ?? "\u270B"}</span>
+        <span class="posture-option-main">
+          <b>${escapeHtml(option.label)}</b>
+          <small>${escapeHtml(option.available ? option.description : option.unavailableReason ?? option.description)}</small>
+        </span>
+        ${option.id === posture ? '<span class="posture-option-check">\u2713</span>' : ""}
+      </button>`).join("")}
+  </div>`;
+}
+
+function toolStateIcon(state: ToolActivity["state"]): string {
+  return state === "complete" ? "\u2713" : state === "error" ? "!" : "\u25CC";
+}
+
+/** One row inside a tool group, expandable only when it has output to show. */
+function toolRow(tool: ToolActivity): string {
+  const id = safeCssToken(tool.id);
+  const head = `<span class="tool-icon ${tool.state}">${toolStateIcon(tool.state)}</span><span class="tool-row-main"><b>${escapeHtml(tool.name)}</b><small>${escapeHtml(tool.summary)}</small></span>`;
+  if (!tool.detail) {
+    return `<div class="tool-row static" id="tool-${id}">${head}</div>`;
+  }
+  return `<details class="tool-row" id="tool-${id}"><summary>${head}<span class="tool-row-chevron">\u2304</span></summary><pre>${escapeHtml(tool.detail)}</pre></details>`;
+}
+
+/**
+ * A run of tool calls as one collapsible block.
+ *
+ * It stays open while anything is still running so progress is visible, then
+ * collapses to a single summary line once the run finishes — unless the reader
+ * has toggled it themselves, in which case their choice sticks.
+ */
+function toolGroupCard(group: { id: string; tools: ToolActivity[] }): string {
+  const running = group.tools.some((tool) => tool.state === "running");
+  const failed = group.tools.filter((tool) => tool.state === "error").length;
+  const done = group.tools.filter((tool) => tool.state === "complete").length;
+  const userToggled = toolGroupsUserToggled.has(group.id);
+  const open = userToggled ? toolGroupsUserToggled.has(`${group.id}:open`) : running;
+
+  const names = [...new Set(group.tools.map((tool) => tool.name))];
+  const shown = names.slice(0, 3).join(", ");
+  const label = names.length > 3 ? `${shown} +${names.length - 3} more` : shown;
+  const count = group.tools.length;
+  const status = running
+    ? `${done}/${count}`
+    : failed
+      ? `${failed} failed`
+      : `${count} done`;
+
+  return `<details class="tool-group ${running ? "running" : failed ? "error" : "complete"}" id="toolgroup-${safeCssToken(group.id)}" data-tool-group="${escapeHtml(group.id)}"${open ? " open" : ""}>
+    <summary>
+      <span class="tool-group-icon">${running ? '<span class="tool-group-spinner"></span>' : failed ? "!" : "\u2713"}</span>
+      <span class="tool-group-main">
+        <b>${count} tool ${count === 1 ? "call" : "calls"}</b>
+        <small>${escapeHtml(label)}</small>
+      </span>
+      <span class="tool-group-status">${escapeHtml(status)}</span>
+      <span class="tool-group-chevron">\u2304</span>
+    </summary>
+    <div class="tool-group-body">${group.tools.map(toolRow).join("")}</div>
+  </details>`;
+}
+
+/** Model reasoning, collapsed by default: available, never in the way. */
+function reasoningCard(item: { id: string; text: string; isStreaming?: boolean }): string {
+  const open = toolGroupsUserToggled.has(`${item.id}:open`);
+  const words = item.text.trim().split(/\s+/).filter(Boolean).length;
+  return `<details class="reasoning-card" id="reasoning-${safeCssToken(item.id)}" data-tool-group="${escapeHtml(item.id)}"${open ? " open" : ""}>
+    <summary>
+      <span class="reasoning-icon">${item.isStreaming ? '<span class="tool-group-spinner"></span>' : "\u25C7"}</span>
+      <span class="reasoning-main"><b>${item.isStreaming ? "Thinking" : "Thought"}</b><small>${words} word${words === 1 ? "" : "s"}</small></span>
+      <span class="tool-group-chevron">\u2304</span>
+    </summary>
+    <div class="reasoning-body">${escapeHtml(item.text)}${item.isStreaming ? '<span class="streaming-cursor"></span>' : ""}</div>
+  </details>`;
 }
 
 function subagentCard(item: SubagentActivity): string {
@@ -2177,7 +2390,10 @@ function wireChatInteractions(): void {
       skillIds: selectedSkillIds,
       ...(images.length > 0 ? { images } : {}),
     });
-    if (input) input.value = "";
+    if (input) {
+      input.value = "";
+      if (input.style) { input.style.height = ""; input.style.overflowY = ""; }
+    }
     attachedImages = [];
     updateContextChips();
     renderTranscript();
@@ -2229,8 +2445,80 @@ function wireChatInteractions(): void {
     btn.addEventListener("click", () => startNewSession());
   });
   wireModelPickerToggle();
+  wirePostureInteractions();
+  wireComposerAutogrow();
   wireTranscriptDelegation();
   wireContextChipDelegation();
+}
+
+/** Posture pill, its menu, and the Shift+Tab cycle. */
+function wirePostureInteractions(): void {
+  const strip = document.querySelector<HTMLElement>("#control-strip");
+  strip?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target || typeof target.closest !== "function") return;
+    if (!target.closest("[data-action=toggle-posture-picker]")) return;
+    event.preventDefault();
+    postureMenuOpen = !postureMenuOpen;
+    modelMenuOpen = false;
+    historyOpen = false;
+    updateControlStrip();
+  });
+
+  const menuContainer = document.querySelector<HTMLElement>("#posture-menu-container");
+  menuContainer?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target || typeof target.closest !== "function") return;
+    const option = target.closest<HTMLElement>("[data-posture]");
+    const next = option?.dataset.posture as PermissionPosture | undefined;
+    if (!next || option?.hasAttribute("disabled")) return;
+    event.preventDefault();
+    postureMenuOpen = false;
+    if (next !== posture) {
+      posture = next;
+      vscode.postMessage({ type: "changePosture", posture: next });
+    }
+    updateControlStrip();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab" || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    // Only claim the chord in the chat surface, and never while a menu that
+    // relies on tab navigation is open.
+    if (currentView !== "chat") return;
+    const selectable = postures.filter((item) => item.available);
+    if (selectable.length < 2) return;
+    event.preventDefault();
+    const index = selectable.findIndex((item) => item.id === posture);
+    const next = selectable[(index + 1) % selectable.length];
+    if (!next || next.id === posture) return;
+    posture = next.id;
+    postureMenuOpen = false;
+    vscode.postMessage({ type: "changePosture", posture: next.id });
+    updateControlStrip();
+  });
+}
+
+/**
+ * Grow the composer with its content instead of pinning it to three rows, so
+ * pasting a long block of data does not leave the writer scrolling a
+ * letterbox. Capped so the transcript never disappears.
+ */
+function wireComposerAutogrow(): void {
+  const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
+  if (!input) return;
+  const resize = () => {
+    if (typeof input.style === "undefined") return;
+    input.style.height = "auto";
+    const max = Math.max(140, Math.round((window.innerHeight || 800) * 0.45));
+    const next = Math.min(input.scrollHeight || 0, max);
+    input.style.height = `${Math.max(56, next)}px`;
+    input.style.overflowY = (input.scrollHeight || 0) > max ? "auto" : "hidden";
+  };
+  input.addEventListener("input", resize);
+  input.addEventListener("paste", () => setTimeout(resize, 0));
+  window.addEventListener("resize", resize);
+  resize();
 }
 
 /**
@@ -2249,6 +2537,19 @@ function wireTranscriptDelegation(): void {
   transcript.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
     if (!target || typeof target.closest !== "function") return;
+    // A summary click toggles the <details> after this handler runs, so record
+    // the state the reader is asking for, not the one still on screen. This has
+    // to precede the action lookup: a summary matches none of those selectors.
+    const collapsible = target.closest<HTMLElement>("summary")?.parentElement as HTMLElement | null;
+    const groupId = collapsible?.dataset?.toolGroup;
+    if (groupId) {
+      const willOpen = !(collapsible as HTMLDetailsElement).open;
+      toolGroupsUserToggled.add(groupId);
+      if (willOpen) toolGroupsUserToggled.add(`${groupId}:open`);
+      else toolGroupsUserToggled.delete(`${groupId}:open`);
+      return;
+    }
+
     const button = target.closest<HTMLElement>("[data-action],[data-copy-msg],[data-checkpoint-path],[data-prompt]");
     if (!button || (typeof transcript.contains === "function" && !transcript.contains(button))) return;
 

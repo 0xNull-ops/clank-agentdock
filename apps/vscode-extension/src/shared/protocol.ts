@@ -19,6 +19,24 @@ export type AgentMode = BuiltInAgentMode | (string & {});
 
 export type RunState = "idle" | "running" | "awaiting_approval" | "cancelled" | "complete" | "error";
 
+/**
+ * How much the agent asks before acting. Orthogonal to the mode: the mode is
+ * the role, the posture is the interruption level. Mirrors the union in
+ * agent-core, restated here so the UI contract stays dependency-free.
+ */
+export type PermissionPosture = "manual" | "auto-edit" | "plan" | "auto";
+
+/** A posture as offered to the user, including why it might be unavailable. */
+export interface PermissionPostureView {
+  id: PermissionPosture;
+  label: string;
+  description: string;
+  risk: "none" | "low" | "elevated";
+  available: boolean;
+  /** Present only when `available` is false. */
+  unavailableReason?: string;
+}
+
 export type UiToExtensionMessage =
   | { type: "ready" }
   | { type: "sendMessage"; text: string; mode: AgentMode; modelId: string; context: ContextRef[]; skillIds: string[]; images?: Array<{ id: string; name: string; dataUrl: string }> }
@@ -34,6 +52,7 @@ export type UiToExtensionMessage =
   | { type: "pickContext" }
   | { type: "changeMode"; mode: AgentMode }
   | { type: "changeModel"; modelId: string }
+  | { type: "changePosture"; posture: PermissionPosture }
   | { type: "approveTool"; approvalId: string }
   | { type: "denyTool"; approvalId: string }
   | { type: "approvePlan"; planId: string; revision: number }
@@ -246,18 +265,21 @@ export interface PlanView {
 }
 
 export type ExtensionToUiMessage =
-  | { type: "initialize"; sessionId: string; mode: AgentMode; modeOptions: ModeOption[]; modelId: string; modelPolicy: ModelPolicyView; models: ModelOption[]; skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView; workspaceName?: string }
+  | { type: "initialize"; sessionId: string; mode: AgentMode; modeOptions: ModeOption[]; modelId: string; modelPolicy: ModelPolicyView; models: ModelOption[]; skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView; workspaceName?: string; posture: PermissionPosture; postures: PermissionPostureView[] }
   | { type: "sessionList"; sessions: SessionHistoryItem[]; activeSessionId: string }
-  | { type: "sessionOpened"; session: SessionHistoryItem; modeOptions: ModeOption[]; modelPolicy: ModelPolicyView; skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView }
+  | { type: "sessionOpened"; session: SessionHistoryItem; modeOptions: ModeOption[]; modelPolicy: ModelPolicyView; skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView; posture: PermissionPosture }
   | { type: "contextAdded"; ref: ContextRef }
   | { type: "modeChanged"; mode: AgentMode }
   | { type: "modesChanged"; modes: ModeOption[] }
   | { type: "modelChanged"; modelId: string }
   | { type: "modelPolicyChanged"; modelPolicy: ModelPolicyView }
+  | { type: "postureChanged"; posture: PermissionPosture; postures: PermissionPostureView[] }
   | { type: "modelsChanged"; models: ModelOption[] }
   | { type: "skillsChanged"; skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[] }
   | { type: "runState"; state: RunState; runId?: string }
   | { type: "textDelta"; runId: string; text: string }
+  /** Streamed model reasoning, rendered as a collapsed thinking card. */
+  | { type: "reasoningDelta"; runId: string; stepId: string; text: string }
   | { type: "assistantMessage"; message: ChatMessage }
   | { type: "toolCall"; tool: ToolActivity }
   | { type: "subagentUpdate"; subagent: SubagentActivity }

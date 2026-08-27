@@ -10,6 +10,8 @@ import {
   SubagentOrchestrator,
   BUILT_IN_SUBAGENTS,
   getSubagentDefinition,
+  resolvePosture,
+  type PermissionPosture,
   type AgentEvent,
   type AgentSession,
   type AgentTool,
@@ -290,6 +292,7 @@ export class AgentRuntimeBridge {
     context: RuntimeContextRef[];
     skillIds?: string[];
     images?: string[];
+    posture: PermissionPosture;
   }): Promise<void> {
     if (this.runs.has(input.sessionId)) {
       this.host.post({ type: "error", kind: "unknown", message: "A run is already active. Cancel it before sending another message." });
@@ -392,7 +395,7 @@ export class AgentRuntimeBridge {
       ...(handoff ? [{ role: "developer" as const, content: handoff.continuityNote }] : []),
       { role: "user", content: userContent },
     ];
-    const permissionEngine = modePermissionEngine(mode, () => this.modes.get(mode.slug));
+    const permissionEngine = modePermissionEngine(mode, input.posture, () => this.modes.get(mode.slug));
     const customSubagents = this.customSubagentDefinitions();
     const availableSubagents = this.availableSubagentSlugs(mode, customSubagents);
     const overrideSubagents = customSubagents.filter((item) => item.routeOverrides && availableSubagents.includes(item.slug)).map((item) => item.slug);
@@ -440,7 +443,7 @@ export class AgentRuntimeBridge {
       },
       executor: {
         execute: async (task, executionContext) => {
-          const execute = () => this.executeSubagent(task, executionContext, configuration, controller.signal, mode, skillSnapshot, activeSkillIds, customSubagents);
+          const execute = () => this.executeSubagent(task, executionContext, configuration, controller.signal, mode, skillSnapshot, activeSkillIds, customSubagents, input.posture);
           const execution = task.authority !== "write"
             ? execute()
             : (async () => {
@@ -632,6 +635,10 @@ export class AgentRuntimeBridge {
       case "text_delta":
         this.host.post({ type: "textDelta", runId: event.sessionId, text: event.text });
         break;
+      case "reasoning_delta":
+        // The loop has always emitted this; it simply never reached the UI.
+        this.host.post({ type: "reasoningDelta", runId: event.sessionId, stepId: event.stepId, text: event.text });
+        break;
       case "tool_call_started":
         this.host.post({ type: "toolCall", tool: toolActivity(event.call.toolName, event.call.id, "running") });
         break;
@@ -682,6 +689,7 @@ export class AgentRuntimeBridge {
     skillSnapshot: SkillTurnSnapshot,
     selectedSkillIds: readonly string[],
     customDefinitions: readonly SubagentDefinition[],
+    posture: PermissionPosture,
   ): Promise<SubagentResult> {
     if (parentSignal.aborted || task.signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
     const customMode = this.modes.get(task.agent);
@@ -756,7 +764,12 @@ export class AgentRuntimeBridge {
       modelId: childConfiguration.model,
       status: "running",
     };
-    const permissionEngine = intersectPermissionEngines(modePermissionEngine(childMode), modePermissionEngine(parentMode, () => this.modes.get(parentMode.slug)));
+    // Children inherit the parent's posture: if the user is running unattended,
+    // a delegated edit should not re-introduce a prompt.
+    const permissionEngine = intersectPermissionEngines(
+      modePermissionEngine(childMode, posture),
+      modePermissionEngine(parentMode, posture, () => this.modes.get(parentMode.slug)),
+    );
     const nestedAgents = childMode.delegationAllowed ? this.availableSubagentSlugs(childMode, customDefinitions) : [];
     const nestedOverrides = customDefinitions.filter((item) => item.routeOverrides && nestedAgents.includes(item.slug)).map((item) => item.slug);
     const nestedTaskTool = childMode.delegationAllowed && nestedAgents.length
@@ -1213,7 +1226,7 @@ function createDiagnosticsTool(): AgentTool {
   };
 }
 
-function modePermissionEngine(mode: ModeDefinition, current?: () => ModeDefinition | undefined): RuntimePermissionEngine {
+function modePermissionEngine(mode: ModeDefinition, posture: PermissionPosture, current?: () => ModeDefinition | undefined): RuntimePermissionEngine {
   return {
     evaluate: (request) => {
       const active = current ? current() : mode;
@@ -1227,8 +1240,14 @@ function modePermissionEngine(mode: ModeDefinition, current?: () => ModeDefiniti
       if (request.toolName.startsWith("mcp_") && active.mcpToolPatterns && !active.mcpToolPatterns.some((pattern) => globMatches(pattern, request.toolName))) {
         return { effect: "deny", source: "mode", reason: `MCP tool is outside mode '${active.slug}' MCP patterns.` };
       }
+      // The posture widens or narrows within the mode's ceiling. Widening runs
+      // through autoApprove, which cannot lift a deny; narrowing runs through
+      // the session layer, whose denies outrank every other layer.
+      const resolution = resolvePosture(posture);
       return new PermissionEngine({
         mode: withPermissionAliases(active.permission),
+        ...(resolution.session ? { session: resolution.session } : {}),
+        ...(resolution.autoApprove ? { autoApprove: resolution.autoApprove } : {}),
         workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
         workspaceTrusted: vscode.workspace.isTrusted,
       }).evaluate(request);

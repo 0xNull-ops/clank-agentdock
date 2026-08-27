@@ -24,6 +24,14 @@ import {
   MODEL_OPTIONS,
   BUILT_IN_MODES,
 } from "./shared/protocol";
+import {
+  DEFAULT_PERMISSION_POSTURE,
+  PERMISSION_POSTURES,
+  permissionPosture,
+  permissionPostureDefinition,
+  type PermissionPosture,
+} from "@freebuff/agent-core";
+import type { PermissionPostureView } from "./shared/protocol";
 import { planViewForSession } from "./runtime/plan-lifecycle";
 import { AgentRuntimeBridge, cachedModelsByProfile, modelIdsForProfile, pruneCachedModels } from "./runtime/bridge";
 import { SessionPersistenceCoordinator, type RestoredSession } from "./runtime/session-persistence";
@@ -43,6 +51,8 @@ import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActi
 const VIEW_ID = "agentdock.agentView";
 const SESSION_LIST_LIMIT = 2_000;
 const SESSION_SKILLS_STATE_KEY = "agentdock.sessionSkills.v1";
+/** Posture is workspace-scoped: a different folder starts from its own default. */
+const POSTURE_STATE_KEY = "agentdock.permissionPosture.v1";
 
 let sessionPersistence: SessionPersistenceCoordinator | undefined;
 
@@ -80,6 +90,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     context.subscriptions.push(
       provider,
+      // Nothing watched configuration before this: the panel's copy of settings
+      // went stale the moment anything was changed outside it, which is why a
+      // reload appeared to be required.
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (!event.affectsConfiguration("agentdock")) return;
+        provider.scheduleSettingsRefresh();
+      }),
+      vscode.workspace.onDidGrantWorkspaceTrust(() => void provider.refreshTrust()),
       vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
         webviewOptions: { retainContextWhenHidden: true },
       }),
@@ -147,8 +165,15 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   private restoredTools: ToolActivity[];
   private restoredSubagents: SubagentActivity[];
   private modeSelectionRequired = false;
+  /**
+   * How much the agent asks before acting. Sticky per workspace, and reset to
+   * Manual whenever workspace trust changes, so a newly trusted folder never
+   * inherits an unattended posture from a previous one.
+   */
+  private posture: PermissionPosture = DEFAULT_PERMISSION_POSTURE;
   /** Report a Freebuff port conflict once per occurrence, not once per turn. */
   private freebuffPortConflictReported = false;
+  private settingsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private acceptedModeSource: string | undefined;
   private sessionOperations: Promise<void> = Promise.resolve();
   private readonly contextSnapshots = new Map<string, { ref: ContextRef; snapshot: string }>();
@@ -188,6 +213,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence, providerProfiles, customModes, skills);
     context.subscriptions.push(customModes.onDidChange(() => this.handleModesReloaded()));
     context.subscriptions.push(skills.onDidChange(() => this.postSkillState()));
+    this.posture = permissionPosture(context.workspaceState.get<string>(POSTURE_STATE_KEY));
     if (restored) {
       this.runtime.restoreHistory(
         restored.session.id,
@@ -240,7 +266,9 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           tools: this.restoredTools,
           subagents: this.restoredSubagents,
           plan: await this.currentPlanView(),
-          workspaceName: vscode.workspace.name
+          workspaceName: vscode.workspace.name,
+          posture: this.posture,
+          postures: this.postureViews(),
         });
         if (this.modeSelectionRequired) this.post({ type: "error", kind: "workspace", message: `Mode '${this.mode}' is unavailable. Select an installed mode before running.` });
         await this.postSessionList();
@@ -272,6 +300,11 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           await this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode, ...(modeModel ? { modelId: modeModel } : {}) });
         });
         return;
+      case "changePosture":
+        await this.enqueueSessionOperation(async () => {
+          await this.setPosture(permissionPosture(message.posture), "user");
+        });
+        return;
       case "changeModel":
         await this.enqueueSessionOperation(async () => {
           const policy = this.runtime.modelPolicyState(this.mode);
@@ -301,7 +334,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           const skillIds = await this.setSelectedSkills(message.skillIds);
           const images = message.images?.map((img) => img.dataUrl);
           await this.ensureFreebuffSidecarRunningIfNeeded();
-          void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context, skillIds, images })
+          void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context, skillIds, images, posture: this.posture })
             .finally(() => this.postSessionList())
             .catch((error) => this.post({ type: "error", kind: "unknown", message: error instanceof Error ? error.message : String(error) }));
         });
@@ -953,6 +986,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       tools: [],
       subagents: [],
       workspaceName: vscode.workspace.name,
+      posture: this.posture,
+      postures: this.postureViews(),
     });
     await this.postSessionList();
   }
@@ -1009,7 +1044,15 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.restoredTools = snapshot ? toolActivitiesFromSnapshot(snapshot) : [];
     this.restoredSubagents = restoredSubagents;
     this.contextSnapshots.clear();
-    this.runtime.restoreHistory(this.sessionId, replayMessages);
+    // Carry the route so a provider/model switch in this reopened session is
+    // recognised as a handoff rather than a verbatim replay.
+    this.runtime.restoreHistory(
+      this.sessionId,
+      replayMessages,
+      restored.session.providerId && restored.session.modelId
+        ? { providerId: restored.session.providerId, modelId: restored.session.modelId }
+        : undefined,
+    );
     this.post({
       type: "sessionOpened",
       session: sessionHistoryItemFromSession(restored.session),
@@ -1020,6 +1063,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       tools: this.restoredTools,
       subagents: this.restoredSubagents,
       plan: await this.currentPlanView(),
+      posture: this.posture,
     });
     this.post({ type: "runState", state: "idle" });
     if (this.modeSelectionRequired) this.post({ type: "error", kind: "workspace", message: `Session mode '${restored.session.activeMode}' is unavailable. Select an installed mode before running.` });
@@ -1515,6 +1559,84 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
+   * Postures offered to the user, with the ones that cannot take effect marked
+   * rather than hidden. An unattended posture in an untrusted workspace is
+   * silently inert — hard safety denies every mutation — so saying so is
+   * clearer than letting the user pick something that does nothing.
+   */
+  private postureViews(): PermissionPostureView[] {
+    const trusted = vscode.workspace.isTrusted;
+    return PERMISSION_POSTURES.map((definition) => ({
+      id: definition.id,
+      label: definition.label,
+      description: definition.description,
+      risk: definition.risk,
+      available: trusted || !definition.requiresTrust,
+      ...(trusted || !definition.requiresTrust
+        ? {}
+        : { unavailableReason: "This workspace is not trusted, so every file change is blocked regardless of posture." }),
+    }));
+  }
+
+  /**
+   * Coalesce settings pushes. Editing settings.json fires per keystroke, and
+   * postSettingsState is invoked from two dozen sites; a trailing-edge flush
+   * keeps the panel from receiving half-updated views in a burst.
+   */
+  public scheduleSettingsRefresh(): void {
+    if (this.settingsRefreshTimer) clearTimeout(this.settingsRefreshTimer);
+    this.settingsRefreshTimer = setTimeout(() => {
+      this.settingsRefreshTimer = undefined;
+      void this.postSettingsState().catch(() => undefined);
+      this.postPostureState();
+    }, 120);
+  }
+
+  private postPostureState(): void {
+    this.post({ type: "postureChanged", posture: this.posture, postures: this.postureViews() });
+  }
+
+  /**
+   * Change posture and tell the user what it means. `reason` distinguishes a
+   * deliberate switch from one forced by a workspace-trust change, which must
+   * be explained rather than appearing to happen on its own.
+   */
+  private async setPosture(next: PermissionPosture, reason: "user" | "trust" | "restore"): Promise<void> {
+    const definition = permissionPostureDefinition(next);
+    const resolved = definition.requiresTrust && !vscode.workspace.isTrusted ? DEFAULT_PERMISSION_POSTURE : next;
+    const changed = resolved !== this.posture;
+    this.posture = resolved;
+    await this.context.workspaceState.update(POSTURE_STATE_KEY, resolved);
+    this.postPostureState();
+    if (!changed || reason === "restore") return;
+    if (reason === "trust") {
+      this.post({ type: "notice", level: "info", message: `Workspace trust changed, so the permission mode was reset to ${permissionPostureDefinition(resolved).label}.` });
+      return;
+    }
+    if (resolved !== next) {
+      this.post({
+        type: "notice",
+        level: "warning",
+        message: `${definition.label} needs a trusted workspace. Staying on ${permissionPostureDefinition(resolved).label}.`,
+      });
+      return;
+    }
+    if (resolved === "auto") {
+      this.post({
+        type: "notice",
+        level: "warning",
+        message: "Auto is on. Edits and commands that pass the safety check run without asking; destructive commands, protected files, and paths outside the workspace still stop for approval.",
+      });
+    }
+  }
+
+  /** Re-evaluate posture availability after a workspace-trust change. */
+  public async refreshTrust(): Promise<void> {
+    await this.setPosture(DEFAULT_PERMISSION_POSTURE, "trust");
+    await this.postSettingsState();
+  }
+
+  /**
    * Changing the route mid-conversation is allowed, but the transcript then has
    * to be handed over rather than replayed verbatim. Tell the user before the
    * next turn, so a surprise reasoning-trace drop is a stated tradeoff rather
@@ -1805,6 +1927,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
 
   /** Stop the sidecar we spawned so it does not outlive the window. */
   public dispose(): void {
+    if (this.settingsRefreshTimer) clearTimeout(this.settingsRefreshTimer);
     this.freebuffSidecar.dispose();
     this.freebuffLog.dispose();
   }
@@ -1921,6 +2044,8 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
       return typeof message.slug === "string" && message.slug.length > 0 && message.slug.length <= 128;
     case "openModeDiagnostic":
       return typeof message.source === "string" && (message.line === undefined || (typeof message.line === "number" && Number.isSafeInteger(message.line)));
+    case "changePosture":
+      return typeof message.posture === "string" && ["manual", "auto-edit", "plan", "auto"].includes(message.posture);
     case "saveDefaultMode":
       return typeof message.mode === "string" && message.mode.length > 0 && message.mode.length <= 128;
     case "saveMaxSteps":

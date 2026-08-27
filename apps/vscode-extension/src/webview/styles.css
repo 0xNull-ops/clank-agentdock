@@ -96,7 +96,7 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .session-action-btn.delete-btn:hover { color: #f87171; border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.15); }
 
 /* Control Strip */
-.control-strip { display: flex; gap: 8px; padding: 10px 14px 4px; }
+.control-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px 4px; }
 .select-wrap { position: relative; display: flex; align-items: center; height: 30px; border: 1px solid var(--forge-border); border-radius: 6px; background: var(--forge-surface); transition: border-color .15s ease; }
 .select-wrap:hover { border-color: var(--forge-border-strong); }
 .select-wrap select { appearance: none; min-width: 0; height: 100%; padding: 0 24px 0 8px; border: 0; outline: 0; color: var(--forge-text); background: transparent; cursor: pointer; font-size: 11.5px; }
@@ -210,6 +210,69 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .tool-card b { color: var(--forge-text); font-size: 11.5px; font-weight: 500; }
 .tool-card small { color: var(--forge-muted); font-size: 10px; }
 .tool-card pre { margin: 0; padding: 8px 10px; overflow: auto; border-top: 1px solid var(--forge-border); color: var(--forge-text-secondary); background: var(--forge-input); font: 10.5px/1.5 var(--forge-code); }
+
+/* Grouped tool calls: one block per run instead of a card per state change. */
+.tool-group { max-width: 640px; margin: 8px auto; overflow: hidden; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); animation: rise .15s ease both; }
+.tool-group > summary { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 6px 10px; cursor: pointer; list-style: none; }
+.tool-group > summary::-webkit-details-marker { display: none; }
+.tool-group > summary:hover { background: var(--forge-input); }
+.tool-group-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: 0 0 auto; border-radius: 5px; color: var(--forge-text-secondary); background: var(--forge-input); border: 1px solid var(--forge-border); font-size: 11px; }
+.tool-group.complete .tool-group-icon { color: var(--forge-success, #4ade80); }
+.tool-group.error .tool-group-icon { color: var(--forge-danger, #f87171); }
+.tool-group-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.tool-group-main b { color: var(--forge-text); font-size: 11.5px; font-weight: 500; }
+.tool-group-main small { color: var(--forge-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-group-status { flex: 0 0 auto; color: var(--forge-muted); font-family: var(--forge-code); font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase; }
+.tool-group-chevron, .tool-row-chevron { flex: 0 0 auto; color: var(--forge-muted); font-size: 12px; transition: transform .15s ease; }
+.tool-group[open] > summary .tool-group-chevron, .tool-row[open] > summary .tool-row-chevron { transform: rotate(180deg); }
+.tool-group-body { border-top: 1px solid var(--forge-border); }
+.tool-row, .tool-row.static { display: block; border-bottom: 1px solid var(--forge-border-soft, var(--forge-border)); }
+.tool-row:last-child, .tool-row.static:last-child { border-bottom: 0; }
+.tool-row.static { display: flex; align-items: center; gap: 8px; padding: 5px 10px; }
+.tool-row > summary { display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer; list-style: none; }
+.tool-row > summary::-webkit-details-marker { display: none; }
+.tool-row > summary:hover { background: var(--forge-input); }
+.tool-row-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.tool-row-main b { color: var(--forge-text); font-size: 11px; font-weight: 500; }
+.tool-row-main small { color: var(--forge-muted); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-row pre { margin: 0; padding: 8px 10px; overflow: auto; max-height: 320px; border-top: 1px solid var(--forge-border); color: var(--forge-text-secondary); background: var(--forge-input); font: 10.5px/1.5 var(--forge-code); }
+.tool-group-spinner { display: inline-block; width: 9px; height: 9px; border: 1.5px solid var(--forge-border-strong); border-top-color: var(--forge-text); border-radius: 50%; animation: toolspin .7s linear infinite; }
+@keyframes toolspin { to { transform: rotate(360deg); } }
+
+/* Reasoning: available on demand, never pushing the answer off screen. */
+.reasoning-card { max-width: 640px; margin: 8px auto; overflow: hidden; border: 1px dashed var(--forge-border); border-radius: var(--forge-radius-md); background: transparent; animation: rise .15s ease both; }
+.reasoning-card > summary { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 5px 10px; cursor: pointer; list-style: none; }
+.reasoning-card > summary::-webkit-details-marker { display: none; }
+.reasoning-card > summary:hover { background: var(--forge-input); }
+.reasoning-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: 0 0 auto; color: var(--forge-muted); font-size: 11px; }
+.reasoning-main { display: flex; align-items: baseline; gap: 7px; flex: 1; min-width: 0; }
+.reasoning-main b { color: var(--forge-text-secondary); font-size: 11px; font-weight: 500; font-style: italic; }
+.reasoning-main small { color: var(--forge-muted); font-size: 9.5px; }
+.reasoning-body { padding: 8px 12px 10px; border-top: 1px dashed var(--forge-border); color: var(--forge-text-secondary); font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 340px; overflow: auto; }
+
+/* Permission posture: the third control, coloured by how much it gives away. */
+.posture-btn { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 1px solid var(--forge-border); border-radius: 6px; background: var(--forge-surface); color: var(--forge-text); cursor: pointer; font-size: 11.5px; transition: all .15s ease; flex: 0 0 auto; }
+.posture-btn:hover, .posture-btn.open { border-color: var(--forge-border-strong); background: var(--forge-input); }
+.posture-btn .posture-glyph { font-size: 11px; line-height: 1; }
+.posture-btn .posture-label { white-space: nowrap; }
+.posture-btn .chevron { color: var(--forge-muted); font-size: 12px; }
+.posture-btn.risk-low { border-color: color-mix(in srgb, var(--forge-accent, #60a5fa) 45%, var(--forge-border)); }
+.posture-btn.risk-elevated { border-color: color-mix(in srgb, #f59e0b 55%, var(--forge-border)); color: #f59e0b; }
+.posture-menu { max-width: 360px; margin: 4px 14px 0; padding: 6px; border: 1px solid var(--forge-border-strong); border-radius: var(--forge-radius-md); background: var(--forge-raised); box-shadow: 0 10px 30px -12px rgba(0,0,0,.5); animation: rise .12s ease both; }
+.posture-menu-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 7px; }
+.posture-menu-hint { color: var(--forge-muted); font-family: var(--forge-code); font-size: 9.5px; }
+.posture-option { display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 7px 8px; border: 0; border-radius: var(--forge-radius-sm); background: transparent; color: var(--forge-text); cursor: pointer; text-align: left; }
+.posture-option:hover:not(:disabled) { background: var(--forge-input); }
+.posture-option.active { background: color-mix(in srgb, var(--forge-accent, #60a5fa) 14%, transparent); }
+.posture-option.unavailable, .posture-option:disabled { opacity: .45; cursor: not-allowed; }
+.posture-option-glyph { flex: 0 0 auto; padding-top: 1px; font-size: 12px; }
+.posture-option-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.posture-option-main b { font-size: 11.5px; font-weight: 500; }
+.posture-option-main small { color: var(--forge-muted); font-size: 10px; line-height: 1.45; }
+.posture-option-check { flex: 0 0 auto; color: var(--forge-text); font-size: 12px; }
+
+/* The composer grows with its content rather than pinning to three rows. */
+.composer textarea { transition: height .1s ease; }
 
 /* Checkpoints & Approvals */
 .checkpoint-card { max-width: 640px; margin: 10px auto; padding: 10px 12px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); animation: rise .15s ease both; }

@@ -16,6 +16,12 @@ export interface PermissionEngineOptions {
   session?: PermissionPolicy;
   workspaceTrusted?: boolean;
   autoMode?: "conservative" | "coding" | "full-auto";
+  /**
+   * Fine-grained ask→allow upgrades used by permission postures. Like
+   * `autoMode` this can only promote an `ask`; it never lifts a `deny`, so a
+   * read-only mode stays read-only no matter which posture is active.
+   */
+  autoApprove?: { edits?: boolean; commands?: boolean };
 }
 
 const MUTATING_TOOLS = new Set([
@@ -258,6 +264,16 @@ export class PermissionEngine {
     if (effect !== "ask") return effect;
     if (this.options.autoMode === "full-auto") return "allow";
     if (this.options.autoMode === "coding" && request.command && !PACKAGE_INSTALL.test(request.command)) return "allow";
+    const auto = this.options.autoApprove;
+    if (auto) {
+      // Commands and file mutations are separable: "edit automatically" must
+      // not also start running shell commands unattended.
+      if (request.command) {
+        if (auto.commands && !PACKAGE_INSTALL.test(request.command)) return "allow";
+      } else if (auto.edits && isMutation(request.toolName)) {
+        return "allow";
+      }
+    }
     return effect;
   }
 }
