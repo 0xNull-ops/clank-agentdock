@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as os from "node:os";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { loadModeRegistry, type ModeDefinition, type NormalizedMessage } from "@freebuff/agent-core";
@@ -280,7 +281,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             return stored ? [{ ...stored.ref, snapshot: stored.snapshot }] : [];
           });
           const skillIds = await this.setSelectedSkills(message.skillIds);
-          void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context, skillIds })
+          const images = message.images?.map((img) => img.dataUrl);
+          void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context, skillIds, images })
             .finally(() => this.postSessionList())
             .catch((error) => this.post({ type: "error", kind: "unknown", message: error instanceof Error ? error.message : String(error) }));
         });
@@ -667,6 +669,43 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             void vscode.window.showErrorMessage(`Failed to start Freebuff: ${res.message}`);
           }
         }
+        await this.postSettingsState();
+        return;
+      }
+      case "setupVibeProxy": {
+        const profileId = "vibeproxy";
+        const baseUrl = "http://127.0.0.1:8317/v1";
+        const existing = await this.providerProfiles.getProfile(profileId);
+        if (!existing) {
+          await this.providerProfiles.createProfile({
+            id: profileId,
+            name: "VibeProxy",
+            type: "openai-compatible",
+            baseUrl,
+            headers: {},
+            manualModels: [],
+            modeDefaults: {},
+            compatibility: {
+              supportsDeveloperRole: true,
+              supportsParallelToolCalls: true,
+              requiresAssistantReasoningReplay: false,
+              requiresAssistantFrameReplay: false,
+              sendMaxTokensAs: "max_tokens",
+            },
+          });
+        }
+        await this.providerProfiles.setActiveProfile(profileId);
+        try {
+          const fetched = await this.runtime.refreshModels(false, profileId, true);
+          if (fetched && fetched.length > 0) {
+            void vscode.window.showInformationMessage(`VibeProxy connected! Discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"}.`);
+          } else {
+            void vscode.window.showInformationMessage("VibeProxy profile created! (No live models returned yet; ensure an account is added in VibeProxy)");
+          }
+        } catch (err) {
+          void vscode.window.showWarningMessage(`VibeProxy profile saved, but endpoint probe failed: ${err instanceof Error ? err.message : String(err)}. Ensure VibeProxy is running on port 8317.`);
+        }
+        await this.refreshProviderSelection();
         await this.postSettingsState();
         return;
       }
@@ -1469,13 +1508,24 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     const selectedSkillIds = this.context.workspaceState.get<Record<string, string[]>>(SESSION_SKILLS_STATE_KEY, {})[this.sessionId] ?? [];
     const modeSkills = this.customModes.get(this.mode)?.skills ?? [];
     return {
-      skills: this.skills.options().map((skill) => ({
-        id: skill.id,
-        name: skill.name,
-        description: skill.description,
-        scope: skill.scope === "user" ? "global" : skill.scope,
-        sourceKind: skill.sourceKind,
-      })),
+      skills: this.skills.options().map((skill) => {
+        const def = this.skills.resolve(skill.id);
+        let sourcePath = def?.source;
+        if (sourcePath) {
+          const home = os.homedir();
+          if (sourcePath.startsWith(home)) {
+            sourcePath = "~" + sourcePath.slice(home.length);
+          }
+        }
+        return {
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          scope: skill.scope === "user" ? "global" : skill.scope,
+          sourceKind: skill.sourceKind,
+          ...(sourcePath ? { source: sourcePath } : {}),
+        };
+      }),
       selectedSkillIds: selectedSkillIds.slice(0, 20),
       mandatorySkillIds: this.skills.resolveIds(modeSkills).resolved,
     };

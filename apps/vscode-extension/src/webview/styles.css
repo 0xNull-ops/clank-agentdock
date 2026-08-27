@@ -200,7 +200,7 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .skill-picker-head small { color: var(--forge-muted); font-size: 10px; }
 .skill-picker input { width: 100%; padding: 7px 9px; border: 1px solid var(--forge-border); border-radius: 6px; outline: 0; color: var(--forge-text); background: var(--forge-input); font-size: 11px; }
 .skill-picker input:focus { border-color: rgba(192,132,252,.55); }
-.skill-options { display: grid; gap: 3px; overflow: auto; }
+.skill-options { display: grid; gap: 3px; max-height: 280px; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
 .skill-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; color: var(--forge-text-secondary); background: transparent; text-align: left; cursor: pointer; }
 .skill-option:hover { background: var(--forge-hover); }
 .skill-option.selected { background: rgba(168,85,247,.1); }
@@ -211,6 +211,7 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .skill-copy b, .skill-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skill-copy b { color: var(--forge-text-secondary); font-size: 11px; font-weight: 600; }
 .skill-copy small { color: var(--forge-muted); font-size: 10px; }
+.skill-source-path { color: var(--forge-muted); font-size: 9.5px; font-family: var(--forge-code); opacity: 0.85; margin-top: 1px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skill-scope { color: var(--forge-muted); font: 9px var(--forge-code); text-transform: uppercase; }
 .skill-empty { margin: 8px; color: var(--forge-muted); font-size: 11px; text-align: center; }
 .composer { position: relative; min-height: 84px; border: 1px solid rgba(56,189,248,.25); border-radius: 12px; background: rgba(8,12,22,.96); box-shadow: 0 8px 24px rgba(0,0,0,.4); transition: border-color .18s ease, box-shadow .18s ease; overflow: hidden; }
@@ -223,6 +224,15 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .composer-left-actions { display: flex; align-items: center; gap: 5px; }
 .context-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 0; border-radius: 4px; color: #facc15; background: transparent; font-size: 12px; font-weight: 500; cursor: pointer; transition: opacity .18s ease; }
 .context-btn:hover { opacity: .8; }
+.image-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 0; border-radius: 4px; color: #38bdf8; background: transparent; font-size: 12px; font-weight: 500; cursor: pointer; transition: opacity .18s ease; }
+.image-btn:hover { opacity: .8; }
+.image-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px 2px 4px; border: 1px solid rgba(56,189,248,.35); border-radius: 6px; background: rgba(56,189,248,.1); color: #e0f2fe; font-size: 11px; max-width: 220px; }
+.image-chip-thumb { width: 18px; height: 18px; object-fit: cover; border-radius: 3px; }
+.image-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.image-chip button { border: 0; background: transparent; color: #94a3b8; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }
+.image-chip button:hover { color: #f87171; }
+.message-images { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.message-image-thumb { max-width: 280px; max-height: 200px; border-radius: 8px; border: 1px solid var(--forge-border); object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
 .skill-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 0; border-radius: 4px; color: #c084fc; background: transparent; font-size: 12px; font-weight: 500; cursor: pointer; }
 .skill-btn:hover, .skill-btn.open { background: rgba(168,85,247,.1); }
 .skill-btn > span { display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; color: var(--forge-text); background: rgba(168,85,247,.16); font: 9px var(--forge-code); }
@@ -401,4 +411,14 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .freebuff-login-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 28px; padding: 0 10px; border: 1px solid color-mix(in srgb, #38bdf8 40%, var(--forge-border)); border-radius: var(--forge-radius-sm); background: rgba(56, 189, 248, 0.1); color: #38bdf8; font-size: 11px; font-weight: 500; cursor: pointer; transition: all .15s ease; }
 .freebuff-login-btn:hover { background: rgba(56, 189, 248, 0.2); border-color: #38bdf8; color: #7dd3fc; }
 .freebuff-connect-btn { height: 30px; white-space: nowrap; font-size: 11px; padding: 0 12px; }
+
+/* VibeProxy Quick Connect Card */
+.vibeproxy-quick-setup-card { margin-bottom: 12px; padding: 12px 14px; border: 1px solid color-mix(in srgb, #a855f7 35%, var(--forge-border)); border-radius: var(--forge-radius-md); background: linear-gradient(135deg, rgba(168, 85, 247, 0.09), color-mix(in srgb, var(--forge-raised) 90%, transparent)); box-shadow: 0 2px 12px rgba(0,0,0,0.15); animation: rise .2s ease both; }
+.vibeproxy-quick-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.vibeproxy-title-row { display: flex; align-items: center; gap: 6px; }
+.vibeproxy-badge { font-size: 9.5px; font-weight: 700; font-family: var(--forge-code); text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: #c084fc; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); }
+.vibeproxy-title { font-size: 12.5px; font-weight: 600; color: var(--forge-text); }
+.vibeproxy-quick-desc { margin: 0 0 10px; font-size: 10.5px; color: var(--forge-text-secondary); line-height: 1.4; }
+.vibeproxy-action-row { display: flex; gap: 10px; align-items: center; }
+.vibeproxy-connect-btn { height: 30px; width: 100%; white-space: nowrap; font-size: 11px; padding: 0 14px; font-weight: 600; }
 

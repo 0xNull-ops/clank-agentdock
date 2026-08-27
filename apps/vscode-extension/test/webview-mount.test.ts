@@ -78,6 +78,7 @@ function createHarness(options: { throwOnFirstRender?: boolean } = {}) {
       return element;
     },
     querySelectorAll: () => [] as never[],
+    addEventListener: () => undefined,
   };
 
   const windowStub = {

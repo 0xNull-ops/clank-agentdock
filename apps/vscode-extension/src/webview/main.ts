@@ -70,7 +70,7 @@ let settingsState: HarnessSettingsState | undefined;
 const providerTestResults: Record<string, { success: boolean; message: string; loading?: boolean }> = {};
 
 type TimelineItem =
-  | { kind: "user_message"; id: string; text: string; createdAt: number }
+  | { kind: "user_message"; id: string; text: string; createdAt: number; images?: string[] }
   | { kind: "assistant_message"; id: string; text: string; createdAt: number; isStreaming?: boolean }
   | { kind: "system_message"; id: string; text: string; createdAt: number }
   | { kind: "tool"; id: string; tool: ToolActivity }
@@ -80,6 +80,7 @@ type TimelineItem =
   | { kind: "approval"; id: string; approval: ToolApproval };
 
 let timeline: TimelineItem[] = [];
+let attachedImages: Array<{ id: string; name: string; dataUrl: string }> = [];
 let modes: ModeOption[] = [...BUILT_IN_MODES];
 let models: ModelOption[] = [
   { id: "openai-compatible", label: "Configure model…", hint: "OpenAI-compatible endpoint" }
@@ -266,7 +267,7 @@ function rebuildTimeline(restoredMessages: ChatMessage[], restoredTools: ToolAct
   timeline = [];
   for (const msg of restoredMessages) {
     if (msg.role === "user") {
-      timeline.push({ kind: "user_message", id: msg.id, text: msg.text, createdAt: msg.createdAt });
+      timeline.push({ kind: "user_message", id: msg.id, text: msg.text, createdAt: msg.createdAt, images: msg.images });
     } else if (msg.role === "assistant") {
       timeline.push({ kind: "assistant_message", id: msg.id, text: msg.text, createdAt: msg.createdAt });
     } else {
@@ -614,8 +615,12 @@ function renderTranscript(): void {
 
 function renderTimelineItem(item: TimelineItem): string {
   switch (item.kind) {
-    case "user_message":
-      return `<article class="message user" id="msg-${item.id}"><div class="message-label">YOU</div><div class="message-body">${formatMarkdown(item.text)}</div></article>`;
+    case "user_message": {
+      const imagePreviews = item.images && item.images.length > 0
+        ? `<div class="message-images">${item.images.map((src) => `<img src="${escapeHtml(src)}" class="message-image-thumb" alt="Attached image" />`).join("")}</div>`
+        : "";
+      return `<article class="message user" id="msg-${item.id}"><div class="message-label">YOU</div><div class="message-body">${imagePreviews}${formatMarkdown(item.text)}</div></article>`;
+    }
     case "assistant_message":
       return `<article class="message assistant" id="msg-${item.id}"><div class="message-label">AGENT</div><div class="message-body">${formatMarkdown(item.text)}${item.isStreaming ? '<span class="streaming-cursor"></span>' : ''}</div></article>`;
     case "system_message":
@@ -1207,6 +1212,23 @@ function renderProvidersTab(): string {
   const sidecarStatus = settingsState?.freebuffSidecarStatus ?? "stopped";
 
   return `
+    <div class="vibeproxy-quick-setup-card">
+      <div class="vibeproxy-quick-header">
+        <div class="vibeproxy-title-row">
+          <span class="vibeproxy-badge">⚡ 1-Click Connect</span>
+          <span class="vibeproxy-title">VibeProxy (Port 8317)</span>
+        </div>
+      </div>
+      <p class="vibeproxy-quick-desc">
+        Connect to your local running VibeProxy daemon to automatically pull models from Claude Code, Codex, Gemini, and Kimi.
+      </p>
+      <div class="vibeproxy-action-row">
+        <button type="button" class="settings-action-btn primary vibeproxy-connect-btn" data-action="connect-vibeproxy">
+          🚀 Connect VibeProxy & Pull Live Models
+        </button>
+      </div>
+    </div>
+
     <div class="freebuff-quick-setup-card">
       <div class="freebuff-quick-header">
         <div class="freebuff-title-row">
@@ -1523,13 +1545,27 @@ function skillChip(id: string): string {
   return `<span class="skill-chip" title="${escapeHtml(skill.description)}"><span>✦</span>${escapeHtml(skill.name)}${action}</span>`;
 }
 
+function imageChip(img: { id: string; name: string; dataUrl: string }): string {
+  return `<span class="image-chip" title="${escapeHtml(img.name)}">
+    <img src="${escapeHtml(img.dataUrl)}" class="image-chip-thumb" alt="Preview" />
+    <span class="image-chip-name">${escapeHtml(img.name)}</span>
+    <button type="button" data-remove-image="${escapeHtml(img.id)}" aria-label="Remove image">×</button>
+  </span>`;
+}
+
 function composerChips(): string {
-  return [...contextRefs.map(contextChip), ...activeSkillIds().map(skillChip)].join("");
+  return [
+    ...attachedImages.map(imageChip),
+    ...contextRefs.map(contextChip),
+    ...activeSkillIds().map(skillChip),
+  ].join("");
 }
 
 function composerLeftActions(): string {
   const count = activeSkillIds().length;
   return `<button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
+    <button type="button" class="image-btn" data-action="pick-image" aria-label="Attach image">📷 image</button>
+    <input type="file" id="image-file-input" accept="image/*" multiple style="display:none;" />
     <button type="button" class="skill-btn ${skillMenuOpen ? "open" : ""}" data-action="skills" aria-label="Choose skills" aria-expanded="${skillMenuOpen}">✦ skills${count ? ` <span>${count}</span>` : ""}</button>`;
 }
 
@@ -1537,10 +1573,14 @@ function skillPicker(): string {
   const rows = skills.map((skill) => {
     const mandatory = mandatorySkillIds.includes(skill.id);
     const checked = mandatory || selectedSkillIds.includes(skill.id);
-    const search = `${skill.name} ${skill.description} ${skill.id}`.toLocaleLowerCase();
+    const search = `${skill.name} ${skill.description} ${skill.id} ${skill.source ?? ""}`.toLocaleLowerCase();
     return `<button type="button" class="skill-option ${checked ? "selected" : ""}" data-skill-id="${escapeHtml(skill.id)}" data-skill-search="${escapeHtml(search)}" ${mandatory ? "disabled" : ""}>
       <span class="skill-check">${mandatory ? "◆" : checked ? "✓" : ""}</span>
-      <span class="skill-copy"><b>${escapeHtml(skill.name)}</b><small>${escapeHtml(skill.description || skill.id)}</small></span>
+      <span class="skill-copy">
+        <b>${escapeHtml(skill.name)}</b>
+        <small>${escapeHtml(skill.description || skill.id)}</small>
+        ${skill.source ? `<span class="skill-source-path" title="${escapeHtml(skill.source)}">📁 ${escapeHtml(skill.source)}</span>` : ""}
+      </span>
       <span class="skill-scope">${escapeHtml(skill.scope)}</span>
     </button>`;
   }).join("");
@@ -1556,22 +1596,42 @@ function postSkillSelection(): void {
 }
 
 function wireChipInteractions(): void {
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-skill]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-image]").forEach((button) => button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const id = button.dataset.removeImage;
+    if (!id) return;
+    attachedImages = attachedImages.filter((img) => img.id !== id);
+    updateContextChips();
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-skill]").forEach((button) => button.addEventListener("click", (e) => {
+    e.stopPropagation();
     const id = button.dataset.removeSkill;
     if (!id) return;
     selectedSkillIds = selectedSkillIds.filter((skillId) => skillId !== id);
     postSkillSelection();
     updateSkillControls();
   }));
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-context]").forEach((button) => button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const id = button.dataset.removeContext;
+    if (!id) return;
+    contextRefs = contextRefs.filter((ref) => ref.id !== id);
+    vscode.postMessage({ type: "removeContext", refId: id });
+    updateContextChips();
+  }));
 }
 
+let skillOutsideClickListenerAttached = false;
+
 function wireSkillInteractions(): void {
-  document.querySelector<HTMLButtonElement>("[data-action=skills]")?.addEventListener("click", () => {
+  document.querySelector<HTMLButtonElement>("[data-action=skills]")?.addEventListener("click", (e) => {
+    e.stopPropagation();
     skillMenuOpen = !skillMenuOpen;
     updateSkillControls();
     if (skillMenuOpen) document.querySelector<HTMLInputElement>("#skill-search")?.focus();
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-skill-id]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll<HTMLButtonElement>("[data-skill-id]").forEach((button) => button.addEventListener("click", (e) => {
+    e.stopPropagation();
     const id = button.dataset.skillId;
     if (!id || mandatorySkillIds.includes(id)) return;
     selectedSkillIds = selectedSkillIds.includes(id)
@@ -1587,11 +1647,82 @@ function wireSkillInteractions(): void {
       row.hidden = query.length > 0 && !(row.dataset.skillSearch ?? "").includes(query);
     });
   });
+
+  if (!skillOutsideClickListenerAttached && typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    skillOutsideClickListenerAttached = true;
+    document.addEventListener("click", (e) => {
+      if (!skillMenuOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const isInside = target.closest(".skill-picker") || target.closest("[data-action=skills]");
+      if (!isInside) {
+        skillMenuOpen = false;
+        updateSkillControls();
+      }
+    });
+  }
+
   wireChipInteractions();
 }
 
 function wireChatInteractions(): void {
   wireSkillInteractions();
+
+  // Paste image directly into textarea
+  const inputEl = document.querySelector<HTMLTextAreaElement>("#composer-input");
+  inputEl?.addEventListener("paste", (event) => {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          event.preventDefault();
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const dataUrl = ev.target?.result as string;
+            if (dataUrl) {
+              attachedImages.push({
+                id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                name: file.name || `pasted-image-${attachedImages.length + 1}.png`,
+                dataUrl,
+              });
+              updateContextChips();
+            }
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    }
+  });
+
+  // Attach image button
+  document.querySelector<HTMLButtonElement>("[data-action=pick-image]")?.addEventListener("click", () => {
+    document.querySelector<HTMLInputElement>("#image-file-input")?.click();
+  });
+  document.querySelector<HTMLInputElement>("#image-file-input")?.addEventListener("change", (e) => {
+    const files = (e.target as HTMLInputElement).files;
+    if (!files) return;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        if (dataUrl) {
+          attachedImages.push({
+            id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: file.name,
+            dataUrl,
+          });
+          updateContextChips();
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    (e.target as HTMLInputElement).value = "";
+  });
+
   document.querySelector<HTMLSelectElement>("#mode-select")?.addEventListener("change", (event) => {
     activeMode = (event.target as HTMLSelectElement).value as AgentMode;
     vscode.postMessage({ type: "changeMode", mode: activeMode });
@@ -1605,12 +1736,30 @@ function wireChatInteractions(): void {
   document.querySelector<HTMLFormElement>("#composer-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
-    if (!input?.value.trim()) return;
-    const text = input.value.trim();
-    timeline.push({ kind: "user_message", id: `user-${Date.now()}`, text, createdAt: Date.now() });
+    const rawText = input?.value.trim() ?? "";
+    if (!rawText && attachedImages.length === 0) return;
+    const text = rawText || (attachedImages.length > 0 ? "Inspect the attached image(s)." : "");
+    const images = [...attachedImages];
+    timeline.push({
+      kind: "user_message",
+      id: `user-${Date.now()}`,
+      text,
+      createdAt: Date.now(),
+      ...(images.length > 0 ? { images: images.map((i) => i.dataUrl) } : {}),
+    });
     runState = "running";
-    vscode.postMessage({ type: "sendMessage", text, mode: activeMode, modelId: activeModel, context: contextRefs, skillIds: selectedSkillIds });
-    input.value = "";
+    vscode.postMessage({
+      type: "sendMessage",
+      text,
+      mode: activeMode,
+      modelId: activeModel,
+      context: contextRefs,
+      skillIds: selectedSkillIds,
+      ...(images.length > 0 ? { images } : {}),
+    });
+    if (input) input.value = "";
+    attachedImages = [];
+    updateContextChips();
     renderTranscript();
     updateRunStateUi();
   });
@@ -1836,6 +1985,13 @@ function wireSettingsInteractions(): void {
     editingApiKeyProfileId = null;
     render();
     document.querySelector<HTMLInputElement>("#provider-name")?.focus();
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=connect-vibeproxy]").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    btn.textContent = "Connecting…";
+    vscode.postMessage({ type: "setupVibeProxy" });
   }));
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=open-freebuff-login]").forEach((btn) => btn.addEventListener("click", (e) => {

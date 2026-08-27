@@ -21,7 +21,7 @@ export type RunState = "idle" | "running" | "awaiting_approval" | "cancelled" | 
 
 export type UiToExtensionMessage =
   | { type: "ready" }
-  | { type: "sendMessage"; text: string; mode: AgentMode; modelId: string; context: ContextRef[]; skillIds: string[] }
+  | { type: "sendMessage"; text: string; mode: AgentMode; modelId: string; context: ContextRef[]; skillIds: string[]; images?: Array<{ id: string; name: string; dataUrl: string }> }
   | { type: "changeSkills"; skillIds: string[] }
   | { type: "cancelRun" }
   | { type: "newSession" }
@@ -66,6 +66,7 @@ export type UiToExtensionMessage =
   | { type: "saveProviderProfile"; profile: SaveProviderProfileInput }
   | { type: "saveCustomMode"; mode: SaveCustomModeInput }
   | { type: "setupFreebuff"; authToken: string }
+  | { type: "setupVibeProxy" }
   | { type: "openExternalUrl"; url: string }
   | { type: "toggleFreebuffSidecar" };
 
@@ -122,6 +123,7 @@ export interface SkillOptionView {
   description: string;
   scope: "project" | "global" | "installed";
   sourceKind: "native" | "compatibility" | "installed";
+  source?: string;
 }
 
 export interface ModeOption {
@@ -247,6 +249,7 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   text: string;
   createdAt: number;
+  images?: string[];
 }
 
 export interface ToolActivity {
