@@ -272,6 +272,60 @@ function render(): void {
   renderChat();
 }
 
+function clankLogoSvg(size = 20): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M46 28 L24 50 L46 72" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M46 28 L51 34" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
+    <path d="M46 72 L51 66" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
+    <path d="M54 28 L76 50 L54 72" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M54 28 L49 34" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
+    <path d="M54 72 L49 66" stroke="#f97316" stroke-width="7" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function clockIconSvg(size = 14): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#facc15" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="10"></circle>
+    <polyline points="12 6 12 12 16 14"></polyline>
+  </svg>`;
+}
+
+function gearIconSvg(size = 16): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="3"></circle>
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+  </svg>`;
+}
+
+function mapIconSvg(size = 18): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
+    <line x1="8" y1="2" x2="8" y2="18"></line>
+    <line x1="16" y1="6" x2="16" y2="22"></line>
+  </svg>`;
+}
+
+function compassIconSvg(size = 18): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="10"></circle>
+    <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" fill="#f97316" stroke="none"></polygon>
+  </svg>`;
+}
+
+function arrowRightSvg(size = 16): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="5" y1="12" x2="19" y2="12"></line>
+    <polyline points="12 5 19 12 12 19"></polyline>
+  </svg>`;
+}
+
+function statusLabel(): string {
+  if (runState === "running") return "Agent is working…";
+  if (runState === "awaiting_approval") return "Waiting for approval…";
+  if (runState === "cancelled") return "Run cancelled";
+  return "Ready when you are";
+}
+
 function renderChat(): void {
   const mode = modes.find((item) => item.id === activeMode) ?? modes[0];
   const visibleModels = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
@@ -291,30 +345,62 @@ function renderChat(): void {
     appRoot.innerHTML = `
       <section class="shell" id="chat-shell">
         <header class="header">
-          <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><div><p class="eyebrow">FORGE / LOCAL HARNESS</p><h1>Agent chat</h1></div></div>
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">${clankLogoSvg(20)}</span>
+            <div>
+              <p class="eyebrow">CLANK / LOCAL HARNESS</p>
+              <h1>Agent chat</h1>
+            </div>
+          </div>
           <div class="header-actions">
-            <button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}"><span class="session-picker-icon">◷</span><span class="session-picker-label" id="session-picker-label">${escapeHtml(activeSessionTitle())}</span><span class="session-picker-chevron">⌄</span></button>
-            <button class="icon-button" data-action="open-settings" aria-label="Open Agent Harness settings" title="Extension Settings">⚙</button>
+            <button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}">
+              <span class="session-picker-icon">${clockIconSvg(14)}</span>
+              <span class="session-picker-label" id="session-picker-label">${escapeHtml(activeSessionTitle())}</span>
+              <span class="session-picker-chevron">⌄</span>
+            </button>
+            <button class="icon-button" data-action="open-settings" aria-label="Open Clank settings" title="Clank Settings">${gearIconSvg(16)}</button>
           </div>
         </header>
         <div id="session-menu-container">${historyOpen ? sessionMenu() : ""}</div>
         <div class="control-strip" id="control-strip">
-          <label class="select-wrap mode-select" id="mode-select-wrap" title="${escapeHtml(`${mode.description} · ${mode.source ?? "unavailable"}`)}"><span class="mode-dot mode-${safeCssToken(mode.id)}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("")}</select><span class="chevron">⌄</span></label>
-          <label class="select-wrap model-select ${modelPolicy.policy}" id="model-select-wrap" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}"><span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span><span class="sr-only">Model</span><select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span></label>
+          <label class="select-wrap mode-select" id="mode-select-wrap" title="${escapeHtml(`${mode.description} · ${mode.source ?? "unavailable"}`)}">
+            <span class="mode-dot mode-${safeCssToken(mode.id)}"></span>
+            <span class="sr-only">Mode</span>
+            <select id="mode-select">${modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("")}</select>
+            <span class="chevron">⌄</span>
+          </label>
+          <label class="select-wrap model-select ${modelPolicy.policy}" id="model-select-wrap" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}">
+            <span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span>
+            <span class="sr-only">Model</span>
+            <select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select>
+            <span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span>
+          </label>
+        </div>
+        <div class="status-row" id="status-row">
+          <div class="status-left">
+            <span class="status-dot ${runState === "running" ? "pulse" : ""}"></span>
+            <span class="status-label">${statusLabel()}</span>
+          </div>
+          <div class="context-track-wrap">
+            <span class="context-label">Context 12%</span>
+            <div class="context-pill-bar"><span style="width: 12%;"></span></div>
+          </div>
         </div>
         <div class="rule"></div>
         <section class="transcript" id="transcript" aria-live="polite">${transcriptContent}</section>
         <footer class="composer-wrap">
           <div class="context-chips" id="context-chips">${contextRefs.map(contextChip).join("")}</div>
           <form class="composer" id="composer-form">
-            <textarea id="composer-input" rows="3" placeholder="Ask ${mode.label.toLowerCase()} anything…" aria-label="Message Agent Harness"></textarea>
+            <div class="composer-top-indicator" title="Connected"></div>
+            <textarea id="composer-input" rows="3" placeholder="Ask ${mode.label.toLowerCase()} anything…" aria-label="Message Clank"></textarea>
             <div class="composer-actions" id="composer-actions">
-              <button type="button" class="quiet-button" data-action="attach" aria-label="Attach context">＋ context</button>
-              <span class="composer-hint">⌘ ↵ to send</span>
-              ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="quiet-button cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
+              <button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
+              <div class="composer-right-actions">
+                <span class="composer-hint"><span class="key-glyph">⌘</span> <span class="key-glyph">↵</span> to send</span>
+                ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
+              </div>
             </div>
           </form>
-          <div class="composer-meta"><span><span class="live-dot"></span> local session</span><button type="button" class="text-button" data-action="new">new session</button></div>
         </footer>
       </section>`;
     wireChatInteractions();
@@ -376,12 +462,19 @@ function updateContextChips(): void {
 }
 
 function updateRunStateUi(): void {
+  const statusLabelEl = document.querySelector<HTMLElement>("#status-row .status-label");
+  if (statusLabelEl) statusLabelEl.textContent = statusLabel();
+  const statusDotEl = document.querySelector<HTMLElement>("#status-row .status-dot");
+  if (statusDotEl) statusDotEl.className = `status-dot ${runState === "running" ? "pulse" : ""}`;
+
   const actions = document.querySelector<HTMLElement>("#composer-actions");
   if (actions) {
     actions.innerHTML = `
-      <button type="button" class="quiet-button" data-action="attach" aria-label="Attach context">＋ context</button>
-      <span class="composer-hint">⌘ ↵ to send</span>
-      ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="quiet-button cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
+      <button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
+      <div class="composer-right-actions">
+        <span class="composer-hint"><span class="key-glyph">⌘</span> <span class="key-glyph">↵</span> to send</span>
+        ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
+      </div>
     `;
     document.querySelector<HTMLButtonElement>("#composer-actions [data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
     document.querySelector<HTMLButtonElement>("#composer-actions [data-action=attach]")?.addEventListener("click", () => vscode.postMessage({ type: "pickContext" }));
@@ -804,8 +897,8 @@ function renderSettings(): void {
             <span>Chat</span>
           </button>
           <div class="settings-title-wrap">
-            <p class="eyebrow">FORGE / CONFIGURATION</p>
-            <h1>Agent Harness settings</h1>
+            <p class="eyebrow">CLANK / CONFIGURATION</p>
+            <h1>Clank settings</h1>
           </div>
         </div>
         <div class="header-actions">
@@ -937,7 +1030,7 @@ function renderModeForm(): string {
   return `
     <form class="settings-form-card" id="mode-form">
       <div class="form-header">
-        <h3>New Agent Harness Mode</h3>
+        <h3>New Clank Mode</h3>
         <button type="button" class="close-form-btn" data-action="cancel-mode-form" title="Close">✕</button>
       </div>
 
@@ -1192,7 +1285,55 @@ function renderGeneralTab(): string {
 }
 
 function emptyState(mode: string): string {
-  return `<div class="empty-state"><div class="orbit"><span>✦</span></div><p class="kicker">${mode.toUpperCase()} MODE</p><h2>Make a sharp start.</h2><p class="empty-copy">Point me at a problem, a file, or a decision. I’ll keep the work grounded in your workspace.</p><div class="starter-grid"><button data-prompt="Map the architecture of this workspace" class="starter">Map this workspace <span>↗</span></button><button data-prompt="What should I work on first?" class="starter">What should I work on first? <span>↗</span></button></div></div>`;
+  return `
+    <div class="empty-state">
+      <div class="clank-hero-orb">
+        <svg class="clank-orb-svg" viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <line x1="20" y1="140" x2="140" y2="20" stroke="url(#orangeStreak)" stroke-width="2.5" stroke-linecap="round"/>
+          <defs>
+            <linearGradient id="orangeStreak" x1="20" y1="140" x2="140" y2="20" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#ea580c" stop-opacity="0"/>
+              <stop offset="30%" stop-color="#f97316" stop-opacity="0.95"/>
+              <stop offset="70%" stop-color="#f97316" stop-opacity="0.95"/>
+              <stop offset="100%" stop-color="#ea580c" stop-opacity="0"/>
+            </linearGradient>
+            <radialGradient id="orbGrad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#141d30"/>
+              <stop offset="70%" stop-color="#0a1020"/>
+              <stop offset="100%" stop-color="#040711"/>
+            </radialGradient>
+          </defs>
+          <circle cx="80" cy="80" r="48" fill="url(#orbGrad)" stroke="rgba(255,255,255,0.12)" stroke-width="1.2"/>
+          <g transform="translate(80, 80) scale(0.68) translate(-50, -50)">
+            <path d="M46 28 L24 50 L46 72" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M46 28 L51 34" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
+            <path d="M46 72 L51 66" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
+            <path d="M54 28 L76 50 L54 72" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M54 28 L49 34" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
+            <path d="M54 72 L49 66" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
+          </g>
+        </svg>
+      </div>
+      <p class="kicker">${mode.toUpperCase()} MODE</p>
+      <h2>Make a <span class="highlight-blue">sharp</span> start.</h2>
+      <p class="empty-copy">Point me at a problem, a file, or a decision. I’ll keep the work grounded in your workspace.</p>
+      <div class="starter-grid">
+        <button data-prompt="Map the architecture of this workspace" class="starter">
+          <span class="starter-left">
+            <span class="starter-icon map">${mapIconSvg()}</span>
+            <span>Map this workspace</span>
+          </span>
+          <span class="starter-arrow">${arrowRightSvg()}</span>
+        </button>
+        <button data-prompt="What should I work on first?" class="starter">
+          <span class="starter-left">
+            <span class="starter-icon compass">${compassIconSvg()}</span>
+            <span>What should I work on first?</span>
+          </span>
+          <span class="starter-arrow">${arrowRightSvg()}</span>
+        </button>
+      </div>
+    </div>`;
 }
 
 function messageCard(message: ChatMessage): string {

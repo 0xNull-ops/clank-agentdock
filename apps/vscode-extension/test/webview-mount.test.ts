@@ -134,7 +134,7 @@ describe("webview mount (blank-panel regression)", () => {
     expect(harness.app.innerHTML).toContain("brand-mark");
     expect(harness.app.innerHTML).toContain("mode-select");
     expect(harness.app.innerHTML).toContain("composer");
-    expect(harness.app.innerHTML).toContain("Make a sharp start.");
+    expect(harness.app.innerHTML).toContain("Make a <span class=\"highlight-blue\">sharp</span> start.");
   });
 
   test("renders a visible startup-failure surface with a correlation id when render throws", () => {

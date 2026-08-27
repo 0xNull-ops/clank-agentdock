@@ -1,6 +1,6 @@
 {
   "name": "freebuff-agent-harness-vscode",
-  "displayName": "Freebuff Agent Harness",
+  "displayName": "Clank",
   "description": "A local-first, provider-agnostic coding agent harness for VS Code.",
   "version": "0.1.0",
   "private": true,
@@ -39,38 +39,38 @@
     "commands": [
       {
         "command": "agentdock.open",
-        "title": "Agent Harness: Open Chat"
+        "title": "Clank: Open Chat"
       },
       {
         "command": "agentdock.setApiKey",
-        "title": "Agent Harness: Set API Key"
+        "title": "Clank: Set API Key"
       },
       {
         "command": "agentdock.clearApiKey",
-        "title": "Agent Harness: Clear API Key"
+        "title": "Clank: Clear API Key"
       },
       {
         "command": "agentdock.validateProvider",
-        "title": "Agent Harness: Validate Provider"
+        "title": "Clank: Validate Provider"
       },
       {
         "command": "agentdock.refreshModels",
-        "title": "Agent Harness: Refresh Provider Models"
+        "title": "Clank: Refresh Provider Models"
       },
       {
         "command": "agentdock.manageProviders",
-        "title": "Agent Harness: Manage Providers"
+        "title": "Clank: Manage Providers"
       },
       {
         "command": "agentdock.manageModes",
-        "title": "Agent Harness: Manage Agents / Modes"
+        "title": "Clank: Manage Agents / Modes"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "agentdock",
-          "title": "Agent Harness",
+          "title": "Clank",
           "icon": "resources/agent.svg"
         }
       ]
@@ -80,12 +80,12 @@
         {
           "type": "webview",
           "id": "agentdock.agentView",
-          "name": "Agent"
+          "name": "Clank"
         }
       ]
     },
     "configuration": {
-      "title": "Agent Harness",
+      "title": "Clank",
       "properties": {
         "agentdock.defaultMode": {
           "type": "string",

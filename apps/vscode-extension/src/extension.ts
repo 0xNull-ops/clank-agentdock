@@ -1375,10 +1375,10 @@ export function renderWebviewHtml(extensionUri: vscode.Uri, webview: vscode.Webv
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
   <link rel="stylesheet" href="${styleUri}" />
-  <title>Agent Harness</title>
+  <title>Clank</title>
 </head>
 <body>
-  <main id="app" aria-label="Agent Harness chat"></main>
+  <main id="app" aria-label="Clank chat"></main>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
