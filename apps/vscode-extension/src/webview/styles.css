@@ -413,6 +413,9 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
    WARM BEIGE THEME (Light Minimalist Paper & Linen)
    ========================================================================= */
 :root[data-theme="beige"],
+html[data-theme="beige"],
+body[data-theme="beige"],
+.shell[data-theme="beige"],
 [data-theme="beige"] {
   --forge-canvas: #f7f5f0;
   --forge-surface: #ffffff;

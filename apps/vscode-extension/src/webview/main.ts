@@ -288,7 +288,6 @@ function rebuildTimeline(restoredMessages: ChatMessage[], restoredTools: ToolAct
 function render(): void {
   if (currentView === "settings") {
     renderSettings();
-    wireSettingsInteractions();
     return;
   }
   renderChat();
@@ -311,8 +310,22 @@ function applyTheme(theme: "charcoal" | "beige"): void {
     }
   } catch {}
   try {
-    if (typeof document !== "undefined" && document.documentElement && typeof document.documentElement.setAttribute === "function") {
-      document.documentElement.setAttribute("data-theme", theme);
+    if (typeof document !== "undefined") {
+      if (document.documentElement && typeof document.documentElement.setAttribute === "function") {
+        document.documentElement.setAttribute("data-theme", theme);
+      }
+      if (document.body && typeof document.body.setAttribute === "function") {
+        document.body.setAttribute("data-theme", theme);
+      }
+      const app = document.getElementById("app");
+      if (app && typeof app.setAttribute === "function") {
+        app.setAttribute("data-theme", theme);
+      }
+      if (typeof document.querySelectorAll === "function") {
+        document.querySelectorAll<HTMLElement>(".shell").forEach((s) => {
+          if (typeof s.setAttribute === "function") s.setAttribute("data-theme", theme);
+        });
+      }
     }
   } catch {}
 }
