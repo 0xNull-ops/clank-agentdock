@@ -61,7 +61,31 @@ export type UiToExtensionMessage =
   | { type: "openModeDiagnostic"; source: string; line?: number }
   | { type: "openAdvancedSettings" }
   | { type: "saveDefaultMode"; mode: string }
-  | { type: "saveMaxSteps"; steps: number };
+  | { type: "saveMaxSteps"; steps: number }
+  | { type: "saveProviderProfile"; profile: SaveProviderProfileInput }
+  | { type: "saveCustomMode"; mode: SaveCustomModeInput };
+
+export interface SaveProviderProfileInput {
+  id?: string;
+  name: string;
+  type?: string;
+  baseUrl: string;
+  apiKey?: string;
+  defaultModel?: string;
+  headers?: Record<string, string>;
+}
+
+export interface SaveCustomModeInput {
+  name: string;
+  slug: string;
+  scope: "project" | "global";
+  type: "all" | "primary" | "subagent";
+  model?: string;
+  modelPolicy?: "user-selectable" | "preferred" | "fixed";
+  steps: number;
+  instructions: string;
+  authority: "read" | "write";
+}
 
 export interface ContextRef {
   id: string;

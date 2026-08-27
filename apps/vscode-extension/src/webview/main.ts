@@ -320,6 +320,11 @@ function renderSettings(): void {
     </section>`;
 }
 
+let isAddingProvider = false;
+let editingProfileId: string | null = null;
+let editingApiKeyProfileId: string | null = null;
+let isAddingMode = false;
+
 function renderModesTab(): string {
   const allModes: ModeDetailView[] = settingsState?.modes ?? modes.map((m) => ({
     id: m.id,
@@ -350,6 +355,8 @@ function renderModesTab(): string {
       <button class="settings-action-btn" data-action="import-mode">⇩ Import Mode</button>
       <button class="settings-action-btn" data-action="reload-modes">↻ Reload Modes</button>
     </div>
+
+    ${isAddingMode ? renderModeForm() : ""}
 
     ${diagnostics.length ? `
       <div class="settings-diagnostics-card">
@@ -402,6 +409,74 @@ function renderModesTab(): string {
     </div>`;
 }
 
+function renderModeForm(): string {
+  return `
+    <form class="settings-form-card" id="mode-form">
+      <div class="form-header">
+        <h3>New Agent Harness Mode</h3>
+        <button type="button" class="close-form-btn" data-action="cancel-mode-form" title="Close">✕</button>
+      </div>
+
+      <div class="form-field">
+        <label for="mode-name">Mode Name <span class="req">*</span></label>
+        <input type="text" id="mode-name" required placeholder="e.g. Security Auditor, Performance Guru" />
+      </div>
+
+      <div class="form-field">
+        <label for="mode-slug">Slug Identifier <span class="req">*</span></label>
+        <input type="text" id="mode-slug" required placeholder="e.g. security-auditor" />
+        <small class="field-hint">Unique filename identifier (lowercase letters, numbers, and dashes)</small>
+      </div>
+
+      <div class="form-row">
+        <div class="form-field">
+          <label for="mode-scope">Scope</label>
+          <select id="mode-scope" class="setting-select">
+            <option value="project">Project (.agent/agents) — workspace shared</option>
+            <option value="global">Global (~/.config) — available everywhere</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label for="mode-type">Execution Target</label>
+          <select id="mode-type" class="setting-select">
+            <option value="all">All (Primary chat + Subagent)</option>
+            <option value="primary">Primary only</option>
+            <option value="subagent">Subagent only</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-field">
+          <label for="mode-authority">Permissions Baseline</label>
+          <select id="mode-authority" class="setting-select">
+            <option value="write">Coding with Approval (edits, commands, checkpoints)</option>
+            <option value="read">Read-Only (inspection, search, diagnostics)</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label for="mode-steps">Max Steps</label>
+          <input type="number" id="mode-steps" min="1" max="100" value="20" class="setting-input" />
+        </div>
+      </div>
+
+      <div class="form-field">
+        <label for="mode-model">Model Override (Optional)</label>
+        <input type="text" id="mode-model" placeholder="Leave empty for session/provider default" />
+      </div>
+
+      <div class="form-field">
+        <label for="mode-instructions">Instructions &amp; Role Prompt <span class="req">*</span></label>
+        <textarea id="mode-instructions" rows="4" required placeholder="Describe the role, responsibilities, guidelines, and behavioral boundaries for this agent..."></textarea>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="card-btn" data-action="cancel-mode-form">Cancel</button>
+        <button type="submit" class="settings-action-btn primary">Create Mode</button>
+      </div>
+    </form>`;
+}
+
 function renderProvidersTab(): string {
   const profiles: ProviderProfileView[] = settingsState?.profiles ?? [
     {
@@ -430,9 +505,15 @@ function renderProvidersTab(): string {
       <button class="settings-action-btn primary full-width" data-action="add-profile">＋ Add Provider Profile</button>
     </div>
 
+    ${isAddingProvider ? renderProviderForm() : ""}
+
     <div class="providers-list">
       ${filtered.length ? filtered.map((profile) => {
+        if (editingProfileId === profile.id) {
+          return renderProviderForm(profile);
+        }
         const testResult = providerTestResults[profile.id];
+        const isEditingKey = editingApiKeyProfileId === profile.id;
         return `
           <article class="settings-card ${profile.isActive ? "active-profile" : ""}">
             <div class="card-header">
@@ -463,6 +544,14 @@ function renderProvidersTab(): string {
               </div>
             </div>
 
+            ${isEditingKey ? `
+              <form class="inline-key-form" data-key-profile-id="${escapeHtml(profile.id)}">
+                <input type="password" class="setting-input inline-key-input" placeholder="Paste API key here (sk-…)..." required autofocus />
+                <button type="submit" class="card-btn primary">Save Key</button>
+                <button type="button" class="card-btn" data-action="cancel-inline-key">Cancel</button>
+              </form>
+            ` : ""}
+
             ${testResult ? `
               <div class="test-result-box ${testResult.success ? "success" : "error"}">
                 ${testResult.success ? "✓" : "✕"} ${escapeHtml(testResult.message)}
@@ -480,8 +569,65 @@ function renderProvidersTab(): string {
             </div>
           </article>
         `;
-      }).join("") : `<p class="session-empty">No providers match “${escapeHtml(settingsQuery)}”.</p>`}
+      }).join("") : `
+        <div class="empty-state" style="margin: 30px auto;">
+          <p class="empty-copy">No provider profiles configured yet.</p>
+          <button class="settings-action-btn primary" data-action="add-profile" style="margin-top: 10px;">＋ Add Your First Provider</button>
+        </div>
+      `}
     </div>`;
+}
+
+function renderProviderForm(editingProfile?: ProviderProfileView): string {
+  const isEditing = Boolean(editingProfile);
+  const profileName = editingProfile?.name ?? "";
+  const profileUrl = editingProfile?.baseUrl ?? "";
+  const profileDefaultModel = editingProfile?.defaultModel ?? "";
+  const hasKey = editingProfile?.hasApiKey ?? false;
+
+  return `
+    <form class="settings-form-card" id="provider-form" data-profile-id="${escapeHtml(editingProfile?.id ?? "")}">
+      <div class="form-header">
+        <h3>${isEditing ? `Edit “${escapeHtml(editingProfile!.name)}”` : "Add Provider Profile"}</h3>
+        <button type="button" class="close-form-btn" data-action="cancel-provider-form" title="Close">✕</button>
+      </div>
+
+      <div class="preset-pills">
+        <span class="preset-label">Presets:</span>
+        <button type="button" class="preset-pill" data-preset="openai">OpenAI</button>
+        <button type="button" class="preset-pill" data-preset="ollama">Ollama (Local)</button>
+        <button type="button" class="preset-pill" data-preset="openrouter">OpenRouter</button>
+        <button type="button" class="preset-pill" data-preset="vllm">vLLM</button>
+        <button type="button" class="preset-pill" data-preset="deepseek">DeepSeek</button>
+      </div>
+
+      <div class="form-field">
+        <label for="provider-name">Profile Name <span class="req">*</span></label>
+        <input type="text" id="provider-name" required placeholder="e.g. OpenAI, Local Ollama, vLLM" value="${escapeHtml(profileName)}" />
+      </div>
+
+      <div class="form-field">
+        <label for="provider-url">Base URL <span class="req">*</span></label>
+        <input type="url" id="provider-url" required placeholder="e.g. https://api.openai.com/v1 or http://localhost:11434/v1" value="${escapeHtml(profileUrl)}" />
+        <small class="field-hint">The OpenAI-compatible /v1 endpoint URL</small>
+      </div>
+
+      <div class="form-field">
+        <label for="provider-key">API Key ${hasKey ? "(Optional)" : "(Optional for local endpoints)"}</label>
+        <input type="password" id="provider-key" placeholder="${hasKey ? "Leave blank to keep existing key" : "sk-…"}" />
+        <small class="field-hint">Encrypted and saved into VS Code SecretStorage</small>
+      </div>
+
+      <div class="form-field">
+        <label for="provider-model">Default Model (Optional)</label>
+        <input type="text" id="provider-model" placeholder="e.g. gpt-4o, llama3.1, deepseek-chat" value="${escapeHtml(profileDefaultModel)}" />
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="card-btn" data-action="cancel-provider-form">Cancel</button>
+        <button type="submit" class="settings-action-btn primary">${isEditing ? "Save Changes" : "Add Provider"}</button>
+      </div>
+    </form>`;
 }
 
 function renderGeneralTab(): string {
@@ -594,6 +740,10 @@ function wireChatInteractions(): void {
   }));
   document.querySelector<HTMLButtonElement>("[data-action=open-settings]")?.addEventListener("click", () => {
     currentView = "settings";
+    isAddingProvider = false;
+    editingProfileId = null;
+    editingApiKeyProfileId = null;
+    isAddingMode = false;
     vscode.postMessage({ type: "requestSettings" });
     render();
   });
@@ -665,6 +815,10 @@ function wireChatInteractions(): void {
 function wireSettingsInteractions(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-action=back-to-chat]").forEach((btn) => btn.addEventListener("click", () => {
     currentView = "chat";
+    isAddingProvider = false;
+    editingProfileId = null;
+    editingApiKeyProfileId = null;
+    isAddingMode = false;
     render();
   }));
 
@@ -672,6 +826,10 @@ function wireSettingsInteractions(): void {
     const tab = btn.dataset.tab as "modes" | "providers" | "general" | undefined;
     if (tab) {
       settingsTab = tab;
+      isAddingProvider = false;
+      editingProfileId = null;
+      editingApiKeyProfileId = null;
+      isAddingMode = false;
       render();
     }
   }));
@@ -687,7 +845,52 @@ function wireSettingsInteractions(): void {
   });
 
   document.querySelector<HTMLButtonElement>("[data-action=create-mode]")?.addEventListener("click", () => {
-    vscode.postMessage({ type: "createMode" });
+    isAddingMode = true;
+    render();
+    document.querySelector<HTMLInputElement>("#mode-name")?.focus();
+  });
+
+  document.querySelector<HTMLButtonElement>("[data-action=cancel-mode-form]")?.addEventListener("click", () => {
+    isAddingMode = false;
+    render();
+  });
+
+  const modeNameInput = document.querySelector<HTMLInputElement>("#mode-name");
+  const modeSlugInput = document.querySelector<HTMLInputElement>("#mode-slug");
+  let slugUserEdited = false;
+  modeSlugInput?.addEventListener("input", () => { slugUserEdited = true; });
+  modeNameInput?.addEventListener("input", () => {
+    if (!slugUserEdited && modeSlugInput) {
+      modeSlugInput.value = safeCssToken(modeNameInput.value);
+    }
+  });
+
+  document.querySelector<HTMLFormElement>("#mode-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const name = (document.querySelector<HTMLInputElement>("#mode-name")?.value ?? "").trim();
+    const slug = (document.querySelector<HTMLInputElement>("#mode-slug")?.value ?? "").trim();
+    const scope = (document.querySelector<HTMLSelectElement>("#mode-scope")?.value ?? "project") as "project" | "global";
+    const type = (document.querySelector<HTMLSelectElement>("#mode-type")?.value ?? "all") as "all" | "primary" | "subagent";
+    const authority = (document.querySelector<HTMLSelectElement>("#mode-authority")?.value ?? "write") as "read" | "write";
+    const steps = Number(document.querySelector<HTMLInputElement>("#mode-steps")?.value ?? 20);
+    const model = (document.querySelector<HTMLInputElement>("#mode-model")?.value ?? "").trim();
+    const instructions = (document.querySelector<HTMLTextAreaElement>("#mode-instructions")?.value ?? "").trim();
+
+    if (!name || !slug || !instructions) return;
+    vscode.postMessage({
+      type: "saveCustomMode",
+      mode: {
+        name,
+        slug,
+        scope,
+        type,
+        authority,
+        steps: Number.isSafeInteger(steps) && steps > 0 ? steps : 20,
+        model: model || undefined,
+        instructions,
+      },
+    });
+    isAddingMode = false;
   });
 
   document.querySelector<HTMLButtonElement>("[data-action=import-mode]")?.addEventListener("click", () => {
@@ -719,9 +922,82 @@ function wireSettingsInteractions(): void {
     if (slug) vscode.postMessage({ type: "deleteMode", slug });
   }));
 
-  document.querySelector<HTMLButtonElement>("[data-action=add-profile]")?.addEventListener("click", () => {
-    vscode.postMessage({ type: "addProvider" });
+  // Provider Form wiring
+  document.querySelectorAll<HTMLButtonElement>("[data-action=add-profile]").forEach((btn) => btn.addEventListener("click", () => {
+    isAddingProvider = true;
+    editingProfileId = null;
+    editingApiKeyProfileId = null;
+    render();
+    document.querySelector<HTMLInputElement>("#provider-name")?.focus();
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=cancel-provider-form]").forEach((btn) => btn.addEventListener("click", () => {
+    isAddingProvider = false;
+    editingProfileId = null;
+    render();
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-preset]").forEach((btn) => btn.addEventListener("click", () => {
+    const preset = btn.dataset.preset;
+    const nameInput = document.querySelector<HTMLInputElement>("#provider-name");
+    const urlInput = document.querySelector<HTMLInputElement>("#provider-url");
+    const modelInput = document.querySelector<HTMLInputElement>("#provider-model");
+
+    if (!nameInput || !urlInput || !modelInput) return;
+    if (preset === "openai") {
+      nameInput.value = "OpenAI";
+      urlInput.value = "https://api.openai.com/v1";
+      modelInput.value = "gpt-4o";
+    } else if (preset === "ollama") {
+      nameInput.value = "Ollama";
+      urlInput.value = "http://localhost:11434/v1";
+      modelInput.value = "llama3.1";
+    } else if (preset === "openrouter") {
+      nameInput.value = "OpenRouter";
+      urlInput.value = "https://openrouter.ai/api/v1";
+      modelInput.value = "anthropic/claude-3.5-sonnet";
+    } else if (preset === "vllm") {
+      nameInput.value = "vLLM";
+      urlInput.value = "http://localhost:8000/v1";
+      modelInput.value = "";
+    } else if (preset === "deepseek") {
+      nameInput.value = "DeepSeek";
+      urlInput.value = "https://api.deepseek.com/v1";
+      modelInput.value = "deepseek-chat";
+    }
+  }));
+
+  document.querySelector<HTMLFormElement>("#provider-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.target as HTMLFormElement;
+    const id = form.dataset.profileId || undefined;
+    const name = (document.querySelector<HTMLInputElement>("#provider-name")?.value ?? "").trim();
+    const baseUrl = (document.querySelector<HTMLInputElement>("#provider-url")?.value ?? "").trim();
+    const key = (document.querySelector<HTMLInputElement>("#provider-key")?.value ?? "").trim();
+    const defaultModel = (document.querySelector<HTMLInputElement>("#provider-model")?.value ?? "").trim();
+
+    if (!name || !baseUrl) return;
+    vscode.postMessage({
+      type: "saveProviderProfile",
+      profile: {
+        id,
+        name,
+        baseUrl,
+        defaultModel: defaultModel || undefined,
+        apiKey: key || undefined,
+      },
+    });
+    isAddingProvider = false;
+    editingProfileId = null;
   });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=edit-profile]").forEach((btn) => btn.addEventListener("click", () => {
+    editingProfileId = btn.dataset.profileId ?? null;
+    isAddingProvider = false;
+    editingApiKeyProfileId = null;
+    render();
+    document.querySelector<HTMLInputElement>("#provider-name")?.focus();
+  }));
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=activate-profile]").forEach((btn) => btn.addEventListener("click", () => {
     const profileId = btn.dataset.profileId;
@@ -729,8 +1005,37 @@ function wireSettingsInteractions(): void {
   }));
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=set-api-key]").forEach((btn) => btn.addEventListener("click", () => {
-    const profileId = btn.dataset.profileId;
-    if (profileId) vscode.postMessage({ type: "setProviderApiKey", profileId });
+    editingApiKeyProfileId = btn.dataset.profileId ?? null;
+    render();
+    document.querySelector<HTMLInputElement>(".inline-key-input")?.focus();
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=cancel-inline-key]").forEach((btn) => btn.addEventListener("click", () => {
+    editingApiKeyProfileId = null;
+    render();
+  }));
+
+  document.querySelectorAll<HTMLFormElement>(".inline-key-form").forEach((form) => form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const profileId = form.dataset.keyProfileId;
+    const keyInput = form.querySelector<HTMLInputElement>(".inline-key-input");
+    const key = keyInput?.value.trim() ?? "";
+    if (profileId && key) {
+      const p = settingsState?.profiles.find((item) => item.id === profileId);
+      if (p) {
+        vscode.postMessage({
+          type: "saveProviderProfile",
+          profile: {
+            id: p.id,
+            name: p.name,
+            baseUrl: p.baseUrl,
+            defaultModel: p.defaultModel,
+            apiKey: key,
+          },
+        });
+      }
+    }
+    editingApiKeyProfileId = null;
   }));
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=clear-api-key]").forEach((btn) => btn.addEventListener("click", () => {
@@ -750,11 +1055,6 @@ function wireSettingsInteractions(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-action=fetch-models]").forEach((btn) => btn.addEventListener("click", () => {
     const profileId = btn.dataset.profileId;
     if (profileId) vscode.postMessage({ type: "fetchProviderModels", profileId });
-  }));
-
-  document.querySelectorAll<HTMLButtonElement>("[data-action=edit-profile]").forEach((btn) => btn.addEventListener("click", () => {
-    const profileId = btn.dataset.profileId;
-    if (profileId) vscode.postMessage({ type: "editProvider", profileId });
   }));
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=delete-profile]").forEach((btn) => btn.addEventListener("click", () => {
@@ -818,3 +1118,4 @@ function safeCssToken(value: string): string {
 }
 
 vscode.postMessage({ type: "ready" });
+

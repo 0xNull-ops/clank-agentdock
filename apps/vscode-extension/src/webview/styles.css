@@ -220,3 +220,26 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .setting-select, .setting-input { width: 100%; max-width: 280px; height: 30px; padding: 0 8px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); outline: 0; color: var(--forge-text); background: var(--forge-input); font-size: 11.5px; }
 .setting-select:focus, .setting-input:focus { border-color: var(--forge-cyan); }
 
+/* Inline Settings Forms */
+.settings-form-card { margin-bottom: 14px; padding: 14px; border: 1px solid color-mix(in srgb, var(--forge-cyan) 40%, var(--forge-border)); border-radius: var(--forge-radius-md); background: linear-gradient(135deg, color-mix(in srgb, var(--forge-cyan) 6%, var(--forge-raised)), var(--forge-raised)); box-shadow: 0 4px 16px rgba(0,0,0,0.25); animation: rise .2s ease both; }
+.form-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--forge-border); }
+.form-header h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--forge-text); }
+.close-form-btn { border: 0; background: transparent; color: var(--forge-muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
+.close-form-btn:hover { background: var(--forge-hover); color: var(--forge-text); }
+.preset-pills { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; font-size: 10.5px; }
+.preset-label { color: var(--forge-muted); font-weight: 500; }
+.preset-pill { padding: 2px 8px; border: 1px solid var(--forge-border); border-radius: 999px; background: var(--forge-surface); color: var(--forge-text-secondary); font-size: 10px; cursor: pointer; transition: all .15s ease; }
+.preset-pill:hover { border-color: var(--forge-cyan); color: var(--forge-cyan); background: color-mix(in srgb, var(--forge-cyan) 10%, transparent); }
+.form-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.form-field label { font-size: 11px; font-weight: 600; color: var(--forge-text-secondary); }
+.form-field .req { color: var(--forge-red); }
+.field-hint { font-size: 9.5px; color: var(--forge-muted); }
+.form-field input, .form-field textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); outline: 0; color: var(--forge-text); background: var(--forge-input); font-size: 11px; font-family: var(--forge-font); }
+.form-field textarea { resize: vertical; line-height: 1.4; }
+.form-field input:focus, .form-field textarea:focus { border-color: var(--forge-cyan); }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 320px) { .form-row { grid-template-columns: 1fr; } }
+.form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--forge-border); }
+.inline-key-form { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px; background: color-mix(in srgb, var(--forge-surface) 90%, transparent); border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); animation: rise .15s ease both; }
+.inline-key-input { flex: 1; height: 26px; font-size: 11px; }
+

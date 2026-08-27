@@ -16,6 +16,8 @@ import {
   type ModeDetailView,
   type CustomModeDiagnosticView,
   type HarnessSettingsState,
+  type SaveProviderProfileInput,
+  type SaveCustomModeInput,
   MODEL_OPTIONS,
   BUILT_IN_MODES,
 } from "./shared/protocol";
@@ -470,6 +472,64 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         const config = vscode.workspace.getConfiguration("agentdock");
         await config.update("maxSteps", message.steps, vscode.ConfigurationTarget.Global);
         await this.postSettingsState();
+        return;
+      }
+      case "saveProviderProfile": {
+        const input = message.profile;
+        const profileId = input.id || safeModeSlug(input.name) || `provider-${Date.now().toString(36)}`;
+        const existing = await this.providerProfiles.getProfile(profileId);
+        if (existing) {
+          await this.providerProfiles.updateProfile(profileId, {
+            name: input.name.trim(),
+            baseUrl: input.baseUrl.trim(),
+            defaultModel: input.defaultModel?.trim() || undefined,
+            ...(input.headers ? { headers: input.headers } : {}),
+          });
+        } else {
+          await this.providerProfiles.createProfile({
+            id: profileId,
+            name: input.name.trim(),
+            type: (input.type || "openai-compatible") as "openai-compatible",
+            baseUrl: input.baseUrl.trim(),
+            headers: input.headers ?? {},
+            manualModels: input.defaultModel?.trim() ? [{ id: input.defaultModel.trim(), displayName: input.defaultModel.trim() }] : [],
+            defaultModel: input.defaultModel?.trim() || undefined,
+            modeDefaults: {},
+            compatibility: {
+              supportsDeveloperRole: true,
+              supportsParallelToolCalls: true,
+              requiresAssistantReasoningReplay: false,
+              requiresAssistantFrameReplay: false,
+              sendMaxTokensAs: "max_tokens",
+            },
+          });
+        }
+        if (input.apiKey !== undefined) {
+          await this.providerProfiles.setApiKey(profileId, input.apiKey.trim() || undefined);
+        }
+        await this.refreshProviderSelection();
+        await this.postSettingsState();
+        void vscode.window.showInformationMessage(`Provider profile '${input.name.trim()}' saved.`);
+        return;
+      }
+      case "saveCustomMode": {
+        const input = message.mode;
+        const slug = safeModeSlug(input.slug || input.name);
+        const scope = input.scope === "global" ? "user" : "project";
+        const markdown = modeMarkdown({
+          name: input.name.trim(),
+          slug,
+          type: input.type,
+          model: input.model?.trim() || undefined,
+          modelPolicy: input.modelPolicy ?? "user-selectable",
+          steps: input.steps || 20,
+          instructions: input.instructions.trim(),
+          ...modeAuthority(input.authority),
+        });
+        await this.customModes.create(scope, markdown, slug);
+        await this.customModes.reload();
+        await this.postSettingsState();
+        void vscode.window.showInformationMessage(`Custom mode '${input.name.trim()}' saved.`);
         return;
       }
       case "approvePlan":
@@ -1143,7 +1203,31 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async getHarnessSettingsState(): Promise<HarnessSettingsState> {
-    const rawProfiles = await this.providerProfiles.listProfiles();
+    let rawProfiles = await this.providerProfiles.listProfiles();
+    if (rawProfiles.length === 0) {
+      try {
+        const seeded = await this.providerProfiles.createProfile({
+          id: "openai-compatible",
+          name: "OpenAI Compatible",
+          type: "openai-compatible",
+          baseUrl: "https://api.openai.com/v1",
+          headers: {},
+          manualModels: [{ id: "gpt-4o", displayName: "GPT-4o" }, { id: "gpt-4o-mini", displayName: "GPT-4o Mini" }],
+          defaultModel: "gpt-4o",
+          modeDefaults: {},
+          compatibility: {
+            supportsDeveloperRole: true,
+            supportsParallelToolCalls: true,
+            requiresAssistantReasoningReplay: false,
+            requiresAssistantFrameReplay: false,
+            sendMaxTokensAs: "max_tokens",
+          },
+        });
+        rawProfiles = [seeded];
+      } catch {
+        rawProfiles = await this.providerProfiles.listProfiles();
+      }
+    }
     const activeId = await this.providerProfiles.getActiveProfileId();
     const profiles: ProviderProfileView[] = await Promise.all(
       rawProfiles.map(async (p) => {
@@ -1323,6 +1407,10 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
       return typeof message.mode === "string" && message.mode.length > 0 && message.mode.length <= 128;
     case "saveMaxSteps":
       return typeof message.steps === "number" && Number.isSafeInteger(message.steps) && message.steps >= 1 && message.steps <= 100;
+    case "saveProviderProfile":
+      return typeof message.profile === "object" && message.profile !== null && typeof (message.profile as Record<string, unknown>).name === "string" && typeof (message.profile as Record<string, unknown>).baseUrl === "string";
+    case "saveCustomMode":
+      return typeof message.mode === "object" && message.mode !== null && typeof (message.mode as Record<string, unknown>).name === "string" && typeof (message.mode as Record<string, unknown>).instructions === "string";
     case "openSession":
     case "renameSession":
     case "duplicateSession":
