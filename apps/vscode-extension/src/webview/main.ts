@@ -1454,6 +1454,143 @@ function renderModeForm(): string {
     </form>`;
 }
 
+/**
+ * One-click connectors, rendered from a declarative table.
+ *
+ * Each integration used to own a hand-written card — its own status pill, its
+ * own button, its own form — which is why three providers behaved three
+ * different ways and adding a fourth meant writing a fourth card. The
+ * behaviour and message contract are unchanged; only the duplication is gone.
+ */
+interface QuickConnector {
+  id: string;
+  title: string;
+  badge: string;
+  description: string;
+  /** Status pill: the class suffix and the text to show. */
+  status: { tone: "running" | "detected" | "error" | "stopped"; text: string };
+  actions: Array<{ label: string; action: string; variant: "primary" | "secondary" }>;
+  /** Optional inline detail block rendered above the actions. */
+  detail?: string;
+  /** Optional credential form rendered below the actions. */
+  form?: string;
+}
+
+function connectedProfile(id: string): ProviderProfileView | undefined {
+  return settingsState?.profiles.find((profile) => profile.id === id);
+}
+
+function quickConnectorDefinitions(): QuickConnector[] {
+  const sidecarStatus = settingsState?.freebuffSidecarStatus ?? "stopped";
+  const sidecarPort = settingsState?.freebuffPort ?? 8080;
+  const detected = settingsState?.detectedFreebuff;
+  const hubmix = connectedProfile("aihubmix");
+  const vibeproxy = connectedProfile("vibeproxy");
+
+  const profileStatus = (profile: ProviderProfileView | undefined, ready: string): QuickConnector["status"] =>
+    !profile
+      ? { tone: "stopped", text: `\u25CB ${ready}` }
+      : profile.isActive
+        ? { tone: "running", text: "\u25CF Active" }
+        : { tone: "detected", text: `\u25CF Added (${profile.models.length} model${profile.models.length === 1 ? "" : "s"})` };
+
+  return [
+    {
+      id: "vibeproxy",
+      title: "VibeProxy (Port 8317)",
+      badge: "1-Click Connect",
+      description: "Connect to your local VibeProxy daemon to pull models from Claude Code, Codex, Gemini, and Kimi.",
+      status: profileStatus(vibeproxy, "Ready to Connect"),
+      actions: [{ label: vibeproxy ? "\u21BB Refresh Live Models" : "Connect & Pull Live Models", action: "connect-vibeproxy", variant: "primary" }],
+    },
+    {
+      id: "freebuff",
+      title: "Freebuff Quick Connect",
+      badge: "Auto-Detect & Connect",
+      description: `Connect to Freebuff using your local terminal authentication (<code>~/.config/manicode/credentials.json</code>) or the managed sidecar on port ${sidecarPort}.`,
+      status: sidecarStatus === "running"
+        ? { tone: "running", text: `\u25CF Sidecar Running (:${sidecarPort})` }
+        : sidecarStatus === "starting"
+          ? { tone: "detected", text: "\u27F3 Starting\u2026" }
+          : sidecarStatus === "error"
+            ? { tone: "error", text: "\u25CF Sidecar Error" }
+            : detected
+              ? { tone: "detected", text: "\u25CF Local Credentials Found" }
+              : { tone: "stopped", text: "\u25CB Terminal Auth Required" },
+      detail: detected
+        ? `<div class="freebuff-detected-banner">
+            <div class="freebuff-detected-icon">\u26A1</div>
+            <div class="freebuff-detected-info">
+              <b>Local Freebuff Credentials Detected</b>
+              <span>User: <strong>${escapeHtml(detected.name || detected.email || "Default")}</strong> ${detected.email && detected.name ? `(${escapeHtml(detected.email)})` : ""}</span>
+              <span>Active Model: <strong>${escapeHtml(detected.activeModel || "deepseek/deepseek-v4-flash")}</strong></span>
+              <small>Freebuff allows one active session per account at a time.</small>
+              <code>${escapeHtml(detected.source)}</code>
+            </div>
+          </div>`
+        : `<div class="freebuff-cli-instruction">
+            <p>Authenticate once in your terminal to enable automatic token discovery:</p>
+            <div class="freebuff-cmd-box">
+              <code>npm i -g freebuff && freebuff</code>
+              <button type="button" class="copy-cmd-btn" data-copy="npm i -g freebuff && freebuff" title="Copy command to clipboard">Copy</button>
+            </div>
+          </div>`
+        + (settingsState?.freebuffSidecarError ? `<p class="connector-error">${escapeHtml(settingsState.freebuffSidecarError)}</p>` : ""),
+      actions: [
+        {
+          label: sidecarStatus === "running"
+            ? "\u21BB Sync Freebuff Models"
+            : detected
+              ? `\u26A1 Connect as ${detected.name || "Detected User"} & Auto-Start`
+              : "\u26A1 Auto-Detect & Connect",
+          action: "connect-freebuff-auto",
+          variant: "primary",
+        },
+        ...(sidecarStatus === "running"
+          ? [{ label: "\u25A0 Stop", action: "toggle-freebuff-sidecar", variant: "secondary" as const }]
+          : [{ label: showFreebuffManualInput ? "Hide Manual Input" : "Manual Paste", action: "toggle-freebuff-manual", variant: "secondary" as const }]),
+      ],
+      form: !detected && showFreebuffManualInput
+        ? `<form class="connector-form" id="freebuff-setup-form">
+            <input type="password" id="freebuff-token-input" class="setting-input" placeholder="Paste Freebuff authToken here\u2026" required />
+            <button type="submit" class="settings-action-btn primary">Connect & Start</button>
+          </form>`
+        : undefined,
+    },
+    {
+      id: "aihubmix",
+      title: "AI HubMix (Inferera API)",
+      badge: "1-Click Connect",
+      description: "Multi-model gateway (https://api.inferera.com) for Claude, GPT, DeepSeek, Qwen, and Gemini.",
+      status: profileStatus(hubmix, "Ready to Connect"),
+      actions: [],
+      form: `<form class="connector-form" id="aihubmix-setup-form">
+        <input type="password" id="aihubmix-key-input" class="setting-input" placeholder="${hubmix?.hasApiKey ? "API key is configured (paste to update)\u2026" : "Paste your AI HubMix API key (sk-\u2026)\u2026"}" ${hubmix?.hasApiKey ? "" : "required"} />
+        <button type="submit" class="settings-action-btn primary">${hubmix ? "Update & Pull Models" : "Connect & Pull Models"}</button>
+      </form>`,
+    },
+  ];
+}
+
+function quickConnectors(): string {
+  return `<div class="quick-connectors">${quickConnectorDefinitions().map((connector) => `
+    <section class="connector-card" data-connector="${escapeHtml(connector.id)}">
+      <header class="connector-head">
+        <div class="connector-title-row">
+          <span class="connector-badge">${escapeHtml(connector.badge)}</span>
+          <span class="connector-title">${escapeHtml(connector.title)}</span>
+        </div>
+        <span class="sidecar-status-pill ${connector.status.tone}">${connector.status.text}</span>
+      </header>
+      <p class="connector-desc">${connector.description}</p>
+      ${connector.detail ?? ""}
+      ${connector.actions.length
+        ? `<div class="connector-actions">${connector.actions.map((action) => `<button type="button" class="settings-action-btn ${action.variant}" data-action="${escapeHtml(action.action)}">${action.label}</button>`).join("")}</div>`
+        : ""}
+      ${connector.form ?? ""}
+    </section>`).join("")}</div>`;
+}
+
 function renderProvidersTab(): string {
   const profiles: ProviderProfileView[] = settingsState?.profiles ?? [
     {
@@ -1477,110 +1614,8 @@ function renderProvidersTab(): string {
       )
     : profiles;
 
-  const sidecarStatus = settingsState?.freebuffSidecarStatus ?? "stopped";
-  const detected = settingsState?.detectedFreebuff;
-
   return `
-    <div class="vibeproxy-quick-setup-card">
-      <div class="vibeproxy-quick-header">
-        <div class="vibeproxy-title-row">
-          <span class="vibeproxy-badge">1-Click Connect</span>
-          <span class="vibeproxy-title">VibeProxy (Port 8317)</span>
-        </div>
-      </div>
-      <p class="vibeproxy-quick-desc">
-        Connect to your local running VibeProxy daemon to automatically pull models from Claude Code, Codex, Gemini, and Kimi.
-      </p>
-      <div class="vibeproxy-action-row">
-        <button type="button" class="settings-action-btn primary vibeproxy-connect-btn" data-action="connect-vibeproxy">
-          Connect VibeProxy &amp; Pull Live Models
-        </button>
-      </div>
-    </div>
-
-    <div class="freebuff-quick-setup-card">
-      <div class="freebuff-quick-header">
-        <div class="freebuff-title-row">
-          <span class="freebuff-badge">Auto-Detect &amp; Connect</span>
-          <span class="freebuff-title">Freebuff Quick Connect</span>
-        </div>
-        <span class="sidecar-status-pill ${sidecarStatus === "running" ? "running" : detected ? "detected" : sidecarStatus === "error" ? "error" : "stopped"}">
-          ${sidecarStatus === "running" ? `● Sidecar Running (:${settingsState?.freebuffPort ?? 8080})` : sidecarStatus === "starting" ? "⟳ Starting…" : detected ? "● Local Credentials Found" : "○ Terminal Auth Required"}
-        </span>
-      </div>
-      <p class="freebuff-quick-desc">
-        Connect to Freebuff using your local terminal authentication (<code>~/.config/manicode/credentials.json</code>) or sidecar.
-      </p>
-      ${detected ? `
-        <div class="freebuff-detected-banner">
-          <div class="freebuff-detected-icon">⚡</div>
-          <div class="freebuff-detected-info">
-            <b>Local Freebuff Credentials Detected</b>
-            <span>User: <strong>${escapeHtml(detected.name || detected.email || "Default")}</strong> ${detected.email && detected.name ? `(${escapeHtml(detected.email)})` : ""}</span>
-            <span>Active Model: <strong>${escapeHtml(detected.activeModel || "deepseek/deepseek-v4-flash")}</strong></span>
-            <small style="color: var(--forge-muted); font-size: 10px; margin-top: 2px;">Note: Freebuff allows 1 active session per account at a time.</small>
-            <code>${escapeHtml(detected.source)}</code>
-          </div>
-        </div>
-        <div class="freebuff-action-row">
-          <button type="button" class="settings-action-btn primary freebuff-connect-btn" data-action="connect-freebuff-auto">
-            ${sidecarStatus === "running" ? "↻ Sync Freebuff Models" : `⚡ Connect as ${escapeHtml(detected.name || "Detected User")} & Auto-Start`}
-          </button>
-          ${sidecarStatus === "running" ? `<button type="button" class="settings-action-btn secondary freebuff-stop-btn" data-action="toggle-freebuff-sidecar">■ Stop</button>` : ""}
-        </div>` : `
-        <div class="freebuff-cli-instruction">
-          <p>Authenticate once in your terminal to enable automatic token discovery:</p>
-          <div class="freebuff-cmd-box">
-            <code>npm i -g freebuff && freebuff</code>
-            <button type="button" class="copy-cmd-btn" data-copy="npm i -g freebuff && freebuff" title="Copy command to clipboard">Copy</button>
-          </div>
-        </div>
-        <div class="freebuff-action-row">
-          <button type="button" class="settings-action-btn primary freebuff-connect-btn" data-action="connect-freebuff-auto">
-            ⚡ Auto-Detect &amp; Connect
-          </button>
-          <button type="button" class="settings-action-btn secondary" data-action="toggle-freebuff-manual">
-            ${showFreebuffManualInput ? "Hide Manual Input" : "Manual Paste"}
-          </button>
-        </div>
-        ${showFreebuffManualInput ? `
-          <form class="freebuff-setup-form" id="freebuff-setup-form" style="margin-top: 8px;">
-            <div class="freebuff-step-row input-row">
-              <input type="password" id="freebuff-token-input" class="setting-input" placeholder="Paste Freebuff authToken here…" required />
-              <button type="submit" class="settings-action-btn primary freebuff-connect-btn">Connect &amp; Start</button>
-            </div>
-          </form>
-        ` : ""}
-      `}
-    </div>
-
-    <div class="aihubmix-quick-setup-card">
-      <div class="aihubmix-quick-header">
-        <div class="aihubmix-title-row">
-          <span class="aihubmix-badge">1-Click Connect</span>
-          <span class="aihubmix-title">AI HubMix (Inferera API)</span>
-        </div>
-        <span class="sidecar-status-pill ${settingsState?.profiles.find((p) => p.id === "aihubmix") ? "running" : "stopped"}">
-          ${(() => {
-            const prof = settingsState?.profiles.find((p) => p.id === "aihubmix");
-            if (!prof) return "○ Ready to Connect";
-            if (prof.isActive) return "● Active";
-            return `● Added (${prof.models.length} models)`;
-          })()}
-        </span>
-      </div>
-      <p class="aihubmix-quick-desc">
-        Multi-model gateway (https://api.inferera.com) for Claude 3.7, GPT-4o, DeepSeek R1, Qwen, and Gemini.
-      </p>
-      <form class="aihubmix-setup-form" id="aihubmix-setup-form">
-        <div class="aihubmix-step-row input-row">
-          <input type="password" id="aihubmix-key-input" class="setting-input" placeholder="${settingsState?.profiles.find((p) => p.id === "aihubmix")?.hasApiKey ? "API Key is configured (paste to update)…" : "Paste your AI HubMix API key (sk-…)…"}" ${settingsState?.profiles.find((p) => p.id === "aihubmix")?.hasApiKey ? "" : "required"} />
-          <button type="submit" class="settings-action-btn primary aihubmix-connect-btn">
-            ${settingsState?.profiles.find((p) => p.id === "aihubmix") ? "Update & Pull Models" : "Connect & Pull Models"}
-          </button>
-        </div>
-      </form>
-    </div>
+    ${quickConnectors()}
 
     <div class="settings-actions-bar">
       <button class="settings-action-btn full-width" data-action="add-profile">＋ Add Provider Profile</button>

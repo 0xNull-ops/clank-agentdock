@@ -271,6 +271,24 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .posture-option-main small { color: var(--forge-muted); font-size: 10px; line-height: 1.45; }
 .posture-option-check { flex: 0 0 auto; color: var(--forge-text); font-size: 12px; }
 
+/* One-click connectors, one component for every integration. */
+.quick-connectors { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.connector-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 13px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); }
+.connector-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.connector-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.connector-badge { padding: 2px 6px; border-radius: 3px; background: var(--forge-input); color: var(--forge-muted); font-family: var(--forge-code); font-size: 8.5px; letter-spacing: .07em; text-transform: uppercase; white-space: nowrap; }
+.connector-title { color: var(--forge-text); font-size: 12px; font-weight: 550; }
+.connector-desc { margin: 0; color: var(--forge-text-secondary); font-size: 11px; line-height: 1.5; }
+.connector-desc code { padding: 1px 4px; border-radius: 3px; background: var(--forge-input); font-family: var(--forge-code); font-size: 10px; }
+.connector-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.connector-form { display: flex; gap: 8px; align-items: center; }
+.connector-form .setting-input { flex: 1; min-width: 0; }
+.connector-error { margin: 0; color: #f87171; font-size: 10.5px; line-height: 1.5; }
+.sidecar-status-pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--forge-border); background: var(--forge-surface-2, var(--forge-input)); color: var(--forge-muted); font-family: var(--forge-code); font-size: 9.5px; white-space: nowrap; }
+.sidecar-status-pill.running { border-color: color-mix(in srgb, #4ade80 45%, var(--forge-border)); color: #4ade80; }
+.sidecar-status-pill.detected { border-color: color-mix(in srgb, #60a5fa 45%, var(--forge-border)); color: #60a5fa; }
+.sidecar-status-pill.error { border-color: color-mix(in srgb, #f87171 45%, var(--forge-border)); color: #f87171; }
+
 /* Context meter: real numbers, and no percentage when there is no window. */
 .context-label.context-idle { opacity: .55; }
 .context-label.warn { color: #f59e0b; }
@@ -427,27 +445,15 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .test-result-box.error { color: #f87171; background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.2); }
 
 /* VibeProxy Quick Connect Card (Minimalist Charcoal) */
-.vibeproxy-quick-setup-card { margin-bottom: 10px; padding: 12px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); animation: rise .15s ease both; }
-.vibeproxy-quick-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.vibeproxy-title-row { display: flex; align-items: center; gap: 6px; }
-.vibeproxy-badge { font-size: 9.5px; font-weight: 600; font-family: var(--forge-code); text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: var(--forge-text-secondary); background: var(--forge-input); border: 1px solid var(--forge-border); }
 .vibeproxy-title { font-size: 12px; font-weight: 600; color: var(--forge-text); }
-.vibeproxy-quick-desc { margin: 0 0 8px; font-size: 10.5px; color: var(--forge-text-secondary); line-height: 1.4; }
-.vibeproxy-action-row { display: flex; gap: 8px; align-items: center; }
-.vibeproxy-connect-btn { height: 28px; width: 100%; white-space: nowrap; font-size: 11px; padding: 0 12px; }
 
 /* Freebuff Quick Connect Card (Minimalist Charcoal) */
-.freebuff-quick-setup-card { margin-bottom: 10px; padding: 12px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); animation: rise .15s ease both; }
-.freebuff-quick-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.freebuff-title-row { display: flex; align-items: center; gap: 6px; }
-.freebuff-badge { font-size: 9.5px; font-weight: 600; font-family: var(--forge-code); text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: var(--forge-text-secondary); background: var(--forge-input); border: 1px solid var(--forge-border); }
 .freebuff-title { font-size: 12px; font-weight: 600; color: var(--forge-text); }
 .sidecar-status-pill { font-size: 9.5px; font-family: var(--forge-code); font-weight: 500; padding: 1px 7px; border-radius: 999px; }
 .sidecar-status-pill.running { color: #4ade80; background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.2); }
 .sidecar-status-pill.stopped { color: var(--forge-muted); background: var(--forge-input); border: 1px solid var(--forge-border); }
 .sidecar-status-pill.detected { color: #60a5fa; background: rgba(96, 165, 250, 0.1); border: 1px solid rgba(96, 165, 250, 0.25); }
 .sidecar-status-pill.error { color: #f87171; background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.2); }
-.freebuff-quick-desc { margin: 0 0 8px; font-size: 10.5px; color: var(--forge-text-secondary); line-height: 1.4; }
 .freebuff-detected-banner { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; padding: 8px 10px; border: 1px solid rgba(96, 165, 250, 0.25); border-radius: var(--forge-radius-sm); background: rgba(96, 165, 250, 0.06); }
 .freebuff-detected-icon { font-size: 14px; line-height: 1.2; }
 .freebuff-detected-info { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; }
@@ -460,11 +466,8 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .freebuff-cmd-box code { font: 10px var(--forge-code); color: var(--forge-text); user-select: all; }
 .copy-cmd-btn { padding: 2px 7px; border: 1px solid var(--forge-border); border-radius: 4px; background: var(--forge-surface); color: var(--forge-text-secondary); font-size: 10px; cursor: pointer; transition: all .15s ease; }
 .copy-cmd-btn:hover { background: var(--forge-hover); color: var(--forge-text); border-color: var(--forge-border-strong); }
-.freebuff-action-row { display: flex; gap: 6px; align-items: center; }
 .freebuff-action-row .settings-action-btn { flex: 1; height: 28px; white-space: nowrap; font-size: 11px; padding: 0 10px; }
 .freebuff-stop-btn { max-width: 110px; }
-.freebuff-setup-form { display: grid; gap: 6px; }
-.freebuff-step-row { display: flex; align-items: center; gap: 6px; }
 .freebuff-step-row.input-row { display: flex; gap: 6px; }
 .freebuff-step-row.input-row input { flex: 1; height: 28px; font-size: 11px; }
 .freebuff-login-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 28px; padding: 0 10px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); background: var(--forge-input); color: var(--forge-text); font-size: 11px; font-weight: 500; cursor: pointer; transition: all .15s ease; }
@@ -472,17 +475,9 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .freebuff-connect-btn { height: 28px; white-space: nowrap; font-size: 11px; padding: 0 12px; }
 
 /* AI HubMix Quick Connect Card (Minimalist Charcoal) */
-.aihubmix-quick-setup-card { margin-bottom: 10px; padding: 12px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); animation: rise .15s ease both; }
-.aihubmix-quick-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.aihubmix-title-row { display: flex; align-items: center; gap: 6px; }
-.aihubmix-badge { font-size: 9.5px; font-weight: 600; font-family: var(--forge-code); text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: var(--forge-text-secondary); background: var(--forge-input); border: 1px solid var(--forge-border); }
 .aihubmix-title { font-size: 12px; font-weight: 600; color: var(--forge-text); }
-.aihubmix-quick-desc { margin: 0 0 8px; font-size: 10.5px; color: var(--forge-text-secondary); line-height: 1.4; }
-.aihubmix-setup-form { display: grid; gap: 6px; }
-.aihubmix-step-row { display: flex; align-items: center; gap: 6px; }
 .aihubmix-step-row.input-row { display: flex; gap: 6px; }
 .aihubmix-step-row.input-row input { flex: 1; height: 28px; font-size: 11px; }
-.aihubmix-connect-btn { height: 28px; white-space: nowrap; font-size: 11px; padding: 0 12px; }
 
 /* Forms */
 .settings-form-card { margin-bottom: 12px; padding: 12px; border: 1px solid var(--forge-border-strong); border-radius: var(--forge-radius-md); background: var(--forge-raised); animation: rise .15s ease both; }
@@ -635,9 +630,7 @@ body[data-theme="beige"],
 }
 
 [data-theme="beige"] .settings-card,
-[data-theme="beige"] .vibeproxy-quick-setup-card,
-[data-theme="beige"] .freebuff-quick-setup-card,
-[data-theme="beige"] .aihubmix-quick-setup-card,
+[data-theme="beige"] .connector-card,
 [data-theme="beige"] .general-setting-item {
   background: #e4ddd0;
   border-color: var(--forge-border);
