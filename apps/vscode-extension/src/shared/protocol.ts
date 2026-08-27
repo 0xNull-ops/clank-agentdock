@@ -64,7 +64,10 @@ export type UiToExtensionMessage =
   | { type: "saveDefaultMode"; mode: string }
   | { type: "saveMaxSteps"; steps: number }
   | { type: "saveProviderProfile"; profile: SaveProviderProfileInput }
-  | { type: "saveCustomMode"; mode: SaveCustomModeInput };
+  | { type: "saveCustomMode"; mode: SaveCustomModeInput }
+  | { type: "setupFreebuff"; authToken: string }
+  | { type: "openExternalUrl"; url: string }
+  | { type: "toggleFreebuffSidecar" };
 
 export interface SaveProviderProfileInput {
   id?: string;
@@ -174,6 +177,8 @@ export interface CustomModeDiagnosticView {
   line?: number;
 }
 
+export type FreebuffSidecarStatus = "stopped" | "starting" | "running" | "error";
+
 export interface HarnessSettingsState {
   activeProfile?: ProviderProfileView;
   profiles: ProviderProfileView[];
@@ -184,6 +189,8 @@ export interface HarnessSettingsState {
   defaultModel: string;
   maxSteps: number;
   workspaceName?: string;
+  freebuffSidecarStatus?: FreebuffSidecarStatus;
+  freebuffSidecarError?: string;
 }
 
 /** UI-safe metadata for a recent workspace session. */

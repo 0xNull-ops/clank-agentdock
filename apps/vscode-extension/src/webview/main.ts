@@ -1204,7 +1204,37 @@ function renderProvidersTab(): string {
       )
     : profiles;
 
+  const sidecarStatus = settingsState?.freebuffSidecarStatus ?? "stopped";
+
   return `
+    <div class="freebuff-quick-setup-card">
+      <div class="freebuff-quick-header">
+        <div class="freebuff-title-row">
+          <span class="freebuff-badge">⚡ 1-Click Setup</span>
+          <span class="freebuff-title">Freebuff Quick Connect</span>
+        </div>
+        <span class="sidecar-status-pill ${sidecarStatus === "running" ? "running" : sidecarStatus === "error" ? "error" : "stopped"}">
+          ${sidecarStatus === "running" ? "● Sidecar Running (:8080)" : sidecarStatus === "starting" ? "⟳ Starting…" : "○ Ready to Connect"}
+        </span>
+      </div>
+      <p class="freebuff-quick-desc">
+        Access Freebuff models (GPT-5.6 Luna, DeepSeek v4, MiniMax, MiMo) directly with zero Docker or terminal setup.
+      </p>
+      <form class="freebuff-setup-form" id="freebuff-setup-form">
+        <div class="freebuff-step-row">
+          <button type="button" class="freebuff-login-btn" data-action="open-freebuff-login">
+            🌐 1. Open Freebuff Login (freebuff.llm.pm)
+          </button>
+        </div>
+        <div class="freebuff-step-row input-row">
+          <input type="password" id="freebuff-token-input" class="setting-input" placeholder="2. Paste your Freebuff authToken here…" required />
+          <button type="submit" class="settings-action-btn primary freebuff-connect-btn">
+            🚀 Connect & Auto-Start
+          </button>
+        </div>
+      </form>
+    </div>
+
     <div class="settings-actions-bar">
       <button class="settings-action-btn primary full-width" data-action="add-profile">＋ Add Provider Profile</button>
     </div>
@@ -1282,13 +1312,25 @@ function renderProvidersTab(): string {
     </div>`;
 }
 
+const DEFAULT_PRESETS_FALLBACK: ProviderPresetView[] = [
+  { id: "openai", name: "OpenAI", description: "OpenAI official endpoints", category: "cloud", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o" },
+  { id: "openrouter", name: "OpenRouter", description: "Universal API gateway", category: "cloud", baseUrl: "https://openrouter.ai/api/v1" },
+  { id: "ollama", name: "Ollama", description: "Local model runner", category: "local", baseUrl: "http://127.0.0.1:11434/v1" },
+  { id: "vllm", name: "vLLM", description: "Local high-throughput engine", category: "local", baseUrl: "http://127.0.0.1:8000/v1" },
+  { id: "deepseek", name: "DeepSeek", description: "DeepSeek API", category: "cloud", baseUrl: "https://api.deepseek.com/v1", defaultModel: "deepseek-chat" },
+  { id: "vibeproxy", name: "VibeProxy", description: "Local subscription proxy (8317)", category: "proxy", baseUrl: "http://127.0.0.1:8317/v1", helpText: "Launch VibeProxy, connect an account, then fetch its live model catalog." },
+  { id: "freebuff2api", name: "Freebuff2API", description: "Local Freebuff proxy (8080)", category: "proxy", baseUrl: "http://127.0.0.1:8080/v1", helpText: "Launch Freebuff2API or use the 1-click Freebuff connector above." },
+];
+
 function renderProviderForm(editingProfile?: ProviderProfileView): string {
   const isEditing = Boolean(editingProfile);
   const profileName = editingProfile?.name ?? "";
   const profileUrl = editingProfile?.baseUrl ?? "";
   const profileDefaultModel = editingProfile?.defaultModel ?? "";
   const hasKey = editingProfile?.hasApiKey ?? false;
-  const presets = settingsState?.providerPresets ?? [];
+  const presets = (settingsState?.providerPresets && settingsState.providerPresets.length > 0)
+    ? settingsState.providerPresets
+    : DEFAULT_PRESETS_FALLBACK;
   const selectedPreset = selectedProviderPresetId ? presets.find((item) => item.id === selectedProviderPresetId) : undefined;
 
   return `
@@ -1795,6 +1837,24 @@ function wireSettingsInteractions(): void {
     render();
     document.querySelector<HTMLInputElement>("#provider-name")?.focus();
   }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=open-freebuff-login]").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    vscode.postMessage({ type: "openExternalUrl", url: "https://freebuff.llm.pm" });
+  }));
+
+  document.querySelector<HTMLFormElement>("#freebuff-setup-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const tokenInput = document.querySelector<HTMLInputElement>("#freebuff-token-input");
+    const authToken = (tokenInput?.value ?? "").trim();
+    if (!authToken) return;
+    const btn = document.querySelector<HTMLButtonElement>(".freebuff-connect-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Connecting…";
+    }
+    vscode.postMessage({ type: "setupFreebuff", authToken });
+  });
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=cancel-provider-form]").forEach((btn) => btn.addEventListener("click", () => {
     isAddingProvider = false;

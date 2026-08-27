@@ -36,6 +36,7 @@ import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
 import { CustomModeStore } from "./runtime/custom-modes";
 import { SkillStore } from "./runtime/skills";
 import { providerPreset, providerPresets } from "./runtime/provider-presets";
+import { FreebuffSidecarManager } from "./runtime/freebuff-sidecar";
 import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActivityFromRecord, toolActivitiesFromSnapshot } from "./shared/session-history";
 
 const VIEW_ID = "agentdock.agentView";
@@ -147,6 +148,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   private acceptedModeSource: string | undefined;
   private sessionOperations: Promise<void> = Promise.resolve();
   private readonly contextSnapshots = new Map<string, { ref: ContextRef; snapshot: string }>();
+  private readonly freebuffSidecar = new FreebuffSidecarManager();
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
@@ -580,6 +582,92 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         await this.customModes.reload();
         await this.postSettingsState();
         void vscode.window.showInformationMessage(`Custom mode '${input.name.trim()}' saved.`);
+        return;
+      }
+      case "openExternalUrl": {
+        void vscode.env.openExternal(vscode.Uri.parse(message.url));
+        return;
+      }
+      case "setupFreebuff": {
+        const token = message.authToken.trim();
+        if (!token) {
+          void vscode.window.showErrorMessage("Please enter a valid Freebuff authToken.");
+          return;
+        }
+        void vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Starting Freebuff sidecar & pulling models…" },
+          async () => {
+            const startResult = await this.freebuffSidecar.start(token);
+            if (!startResult.ok) {
+              void vscode.window.showErrorMessage(`Failed to start Freebuff: ${startResult.message}`);
+              await this.postSettingsState();
+              return;
+            }
+
+            const profileId = "freebuff";
+            const existing = await this.providerProfiles.getProfile(profileId);
+            if (!existing) {
+              await this.providerProfiles.createProfile({
+                id: profileId,
+                name: "Freebuff",
+                type: "openai-compatible",
+                baseUrl: this.freebuffSidecar.getBaseUrl(),
+                headers: {},
+                manualModels: [],
+                defaultModel: "gpt-5.6-luna",
+                modeDefaults: {},
+                compatibility: {
+                  supportsDeveloperRole: true,
+                  supportsParallelToolCalls: true,
+                  requiresAssistantReasoningReplay: false,
+                  requiresAssistantFrameReplay: false,
+                  sendMaxTokensAs: "max_tokens",
+                },
+              });
+            } else {
+              await this.providerProfiles.updateProfile(profileId, {
+                baseUrl: this.freebuffSidecar.getBaseUrl(),
+                defaultModel: existing.defaultModel || "gpt-5.6-luna",
+              });
+            }
+
+            await this.providerProfiles.setApiKey(profileId, token);
+            await this.providerProfiles.setActiveProfile(profileId);
+
+            try {
+              const fetched = await this.runtime.refreshModels(false, profileId, true);
+              if (fetched && fetched.length > 0) {
+                void vscode.window.showInformationMessage(`Freebuff connected! Discovered ${fetched.length} models.`);
+              }
+            } catch (err) {
+              void vscode.window.showWarningMessage(`Freebuff started, but model discovery encountered an error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+
+            await this.refreshProviderSelection();
+            await this.postSettingsState();
+          }
+        );
+        return;
+      }
+      case "toggleFreebuffSidecar": {
+        const isRunning = await this.freebuffSidecar.isRunning();
+        if (isRunning) {
+          this.freebuffSidecar.stop();
+          void vscode.window.showInformationMessage("Freebuff sidecar stopped.");
+        } else {
+          const token = (await this.providerProfiles.getApiKey("freebuff")) || "";
+          if (!token) {
+            void vscode.window.showErrorMessage("No Freebuff authToken found. Please configure Freebuff first.");
+            return;
+          }
+          const res = await this.freebuffSidecar.start(token);
+          if (res.ok) {
+            void vscode.window.showInformationMessage("Freebuff sidecar started.");
+          } else {
+            void vscode.window.showErrorMessage(`Failed to start Freebuff: ${res.message}`);
+          }
+        }
+        await this.postSettingsState();
         return;
       }
       case "approvePlan":
@@ -1346,6 +1434,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     const defaultModel = config.get<string>("defaultModel", MODEL_OPTIONS[0].id);
     const maxSteps = config.get<number>("maxSteps", 20);
 
+    const sidecarStatus = this.freebuffSidecar.getStatus();
+
     return {
       activeProfile,
       profiles,
@@ -1365,6 +1455,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       defaultModel,
       maxSteps,
       workspaceName: vscode.workspace.name,
+      freebuffSidecarStatus: sidecarStatus.status,
+      freebuffSidecarError: sidecarStatus.error,
     };
   }
 

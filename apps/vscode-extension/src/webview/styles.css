@@ -382,3 +382,23 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--forge-border); }
 .inline-key-form { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px; background: color-mix(in srgb, var(--forge-surface) 90%, transparent); border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); animation: rise .15s ease both; }
 .inline-key-input { flex: 1; height: 26px; font-size: 11px; }
+
+/* Freebuff 1-Click Setup Card */
+.freebuff-quick-setup-card { margin-bottom: 14px; padding: 12px 14px; border: 1px solid color-mix(in srgb, #38bdf8 30%, var(--forge-border)); border-radius: var(--forge-radius-md); background: linear-gradient(135deg, rgba(56, 189, 248, 0.08), color-mix(in srgb, var(--forge-raised) 90%, transparent)); box-shadow: 0 2px 12px rgba(0,0,0,0.15); animation: rise .2s ease both; }
+.freebuff-quick-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.freebuff-title-row { display: flex; align-items: center; gap: 6px; }
+.freebuff-badge { font-size: 9.5px; font-weight: 700; font-family: var(--forge-code); text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); }
+.freebuff-title { font-size: 12.5px; font-weight: 600; color: var(--forge-text); }
+.sidecar-status-pill { font-size: 9.5px; font-family: var(--forge-code); font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.sidecar-status-pill.running { color: var(--forge-green); background: color-mix(in srgb, var(--forge-green) 15%, transparent); border: 1px solid color-mix(in srgb, var(--forge-green) 30%, transparent); }
+.sidecar-status-pill.stopped { color: var(--forge-muted); background: color-mix(in srgb, var(--forge-muted) 15%, transparent); border: 1px solid var(--forge-border); }
+.sidecar-status-pill.error { color: var(--forge-red); background: color-mix(in srgb, var(--forge-red) 15%, transparent); border: 1px solid color-mix(in srgb, var(--forge-red) 30%, transparent); }
+.freebuff-quick-desc { margin: 0 0 10px; font-size: 10.5px; color: var(--forge-text-secondary); line-height: 1.4; }
+.freebuff-setup-form { display: grid; gap: 8px; }
+.freebuff-step-row { display: flex; align-items: center; gap: 8px; }
+.freebuff-step-row.input-row { display: flex; gap: 6px; }
+.freebuff-step-row.input-row input { flex: 1; height: 30px; font-size: 11px; }
+.freebuff-login-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 28px; padding: 0 10px; border: 1px solid color-mix(in srgb, #38bdf8 40%, var(--forge-border)); border-radius: var(--forge-radius-sm); background: rgba(56, 189, 248, 0.1); color: #38bdf8; font-size: 11px; font-weight: 500; cursor: pointer; transition: all .15s ease; }
+.freebuff-login-btn:hover { background: rgba(56, 189, 248, 0.2); border-color: #38bdf8; color: #7dd3fc; }
+.freebuff-connect-btn { height: 30px; white-space: nowrap; font-size: 11px; padding: 0 12px; }
+
