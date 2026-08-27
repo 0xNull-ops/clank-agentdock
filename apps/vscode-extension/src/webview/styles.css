@@ -89,10 +89,11 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 .session-item-main small { color: var(--forge-muted); font: 9px var(--forge-code); }
 .session-item-status { min-width: 35px; color: var(--forge-muted); font: 9px var(--forge-code); text-align: right; text-transform: uppercase; }
 .session-item-status.waiting { color: var(--forge-amber); }
-.session-item-actions { display: none; align-items: center; padding-right: 4px; }
-.session-item:hover .session-item-actions, .session-item:focus-within .session-item-actions { display: flex; }
-.session-item-actions button { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; color: var(--forge-muted); background: transparent; cursor: pointer; }
-.session-item-actions button:hover { color: var(--forge-text); background: var(--forge-hover); }
+.session-item-actions { display: flex; align-items: center; gap: 4px; padding-right: 6px; }
+.session-action-btn { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--forge-border); border-radius: 4px; color: var(--forge-text-secondary); background: var(--forge-input); cursor: pointer; font-size: 11.5px; transition: all .15s ease; }
+.session-action-btn:hover { color: var(--forge-text); background: var(--forge-hover); border-color: var(--forge-border-strong); transform: scale(1.05); }
+.session-action-btn.delete-btn { color: var(--forge-muted); }
+.session-action-btn.delete-btn:hover { color: #f87171; border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.15); }
 
 /* Control Strip */
 .control-strip { display: flex; gap: 8px; padding: 10px 14px 4px; }
@@ -173,8 +174,12 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 /* Messages */
 .message { margin: 0 auto 14px; max-width: 640px; animation: rise .2s ease both; }
 .message.user { padding: 10px 12px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); }
+.message-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .message.user .message-label { color: var(--forge-text-secondary); }
 .message.assistant .message-label { color: var(--forge-text-secondary); }
+.message-actions { display: flex; align-items: center; gap: 4px; }
+.msg-action-btn { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border: 1px solid var(--forge-border); border-radius: 4px; color: var(--forge-text-secondary); background: var(--forge-input); font-size: 10px; font-weight: 500; cursor: pointer; transition: all .15s ease; opacity: 0.8; }
+.msg-action-btn:hover { opacity: 1; color: var(--forge-text); background: var(--forge-hover); border-color: var(--forge-border-strong); }
 .message.system { padding: 7px 10px; border-left: 2px solid var(--forge-border-strong); color: var(--forge-text-secondary); background: var(--forge-surface); }
 .message-body { color: var(--forge-text); line-height: 1.6; font-size: 12.5px; word-break: break-word; }
 .message-body p { margin: 0 0 8px; }

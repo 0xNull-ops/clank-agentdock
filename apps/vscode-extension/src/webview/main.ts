@@ -706,12 +706,33 @@ function renderTimelineItem(item: TimelineItem): string {
       const imagePreviews = item.images && item.images.length > 0
         ? `<div class="message-images">${item.images.map((src) => `<img src="${escapeHtml(src)}" class="message-image-thumb" alt="Attached image" />`).join("")}</div>`
         : "";
-      return `<article class="message user" id="msg-${item.id}"><div class="message-label">YOU</div><div class="message-body">${imagePreviews}${formatMarkdown(item.text)}</div></article>`;
+      return `<article class="message user" id="msg-${item.id}">
+        <div class="message-header">
+          <span class="message-label">YOU</span>
+          <div class="message-actions">
+            <button type="button" class="msg-action-btn" data-copy-msg="${item.id}" title="Copy message text">📋 Copy</button>
+          </div>
+        </div>
+        <div class="message-body">${imagePreviews}${formatMarkdown(item.text)}</div>
+      </article>`;
     }
     case "assistant_message":
-      return `<article class="message assistant" id="msg-${item.id}"><div class="message-label">AGENT</div><div class="message-body">${formatMarkdown(item.text)}${item.isStreaming ? '<span class="streaming-cursor"></span>' : ''}</div></article>`;
+      return `<article class="message assistant" id="msg-${item.id}">
+        <div class="message-header">
+          <span class="message-label">AGENT</span>
+          <div class="message-actions">
+            <button type="button" class="msg-action-btn" data-copy-msg="${item.id}" title="Copy response">📋 Copy</button>
+          </div>
+        </div>
+        <div class="message-body">${formatMarkdown(item.text)}${item.isStreaming ? '<span class="streaming-cursor"></span>' : ''}</div>
+      </article>`;
     case "system_message":
-      return `<article class="message system" id="msg-${item.id}"><div class="message-label">SYSTEM</div><div class="message-body">${formatMarkdown(item.text)}</div></article>`;
+      return `<article class="message system" id="msg-${item.id}">
+        <div class="message-header">
+          <span class="message-label">SYSTEM</span>
+        </div>
+        <div class="message-body">${formatMarkdown(item.text)}</div>
+      </article>`;
     case "tool":
       return toolCard(item.tool);
     case "subagent":
@@ -2052,32 +2073,17 @@ function wireChatInteractions(): void {
     historyOpen = !historyOpen;
     updateSessionPicker();
   });
-  document.querySelector<HTMLButtonElement>("[data-action=refresh-sessions]")?.addEventListener("click", () => {
-    vscode.postMessage({ type: "listSessions" });
-  });
-  document.querySelector<HTMLInputElement>("#session-search")?.addEventListener("input", (event) => {
-    historyQuery = (event.target as HTMLInputElement).value;
-    const query = historyQuery.trim().toLocaleLowerCase();
-    document.querySelectorAll<HTMLElement>("[data-session-search]").forEach((row) => {
-      row.hidden = query.length > 0 && !(row.dataset.sessionSearch ?? "").includes(query);
-    });
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-session-id]").forEach((button) => button.addEventListener("click", () => {
-    const sessionId = button.dataset.sessionId;
-    if (!sessionId || historyBusy) return;
-    historyBusy = true;
-    historyOpen = false;
-    updateSessionPicker();
-    vscode.postMessage({ type: "openSession", sessionId });
-  }));
-  document.querySelectorAll<HTMLButtonElement>("[data-session-action]").forEach((button) => button.addEventListener("click", () => {
-    const sessionId = button.dataset.actionSessionId;
-    const action = button.dataset.sessionAction;
-    if (!sessionId || historyBusy) return;
-    if (action === "rename") vscode.postMessage({ type: "renameSession", sessionId });
-    if (action === "duplicate") vscode.postMessage({ type: "duplicateSession", sessionId });
-    if (action === "export") vscode.postMessage({ type: "exportSession", sessionId });
-    if (action === "delete") vscode.postMessage({ type: "deleteSession", sessionId });
+  document.querySelectorAll<HTMLButtonElement>("[data-copy-msg]").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = btn.dataset.copyMsg;
+    const item = timeline.find((t) => t.id === id);
+    if (item && "text" in item && item.text && typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(item.text);
+      const prev = btn.textContent;
+      btn.textContent = "✓ Copied";
+      setTimeout(() => { btn.textContent = prev; }, 1500);
+    }
   }));
   document.querySelector<HTMLButtonElement>("[data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
   document.querySelector<HTMLButtonElement>("[data-action=approve]")?.addEventListener("click", () => { if (approval) vscode.postMessage({ type: "approveTool", approvalId: approval.id }); });
@@ -2473,7 +2479,21 @@ function sessionMenu(): string {
     ? sessions.map((session) => {
       const search = `${session.title} ${session.activeMode} ${session.modelId} ${formatSessionDate(session.updatedAt)}`.toLocaleLowerCase();
       const hidden = historyQuery.trim() && !search.includes(historyQuery.trim().toLocaleLowerCase()) ? " hidden" : "";
-      return `<div class="session-item ${session.id === activeSessionId ? "active" : ""}" data-session-search="${escapeHtml(search)}"${hidden}><button class="session-item-open" data-session-id="${escapeHtml(session.id)}" role="menuitem" ${historyBusy ? "disabled" : ""}><span class="session-item-main"><b>${escapeHtml(session.title || "Untitled session")}</b><small>${escapeHtml(session.activeMode)} · ${escapeHtml(session.modelId)} · ${formatSessionDate(session.updatedAt)}</small></span><span class="session-item-status ${session.status}">${session.id === activeSessionId ? "open" : session.status === "waiting_for_approval" ? "waiting" : ""}</span></button><div class="session-item-actions" aria-label="Session actions"><button data-session-action="rename" data-action-session-id="${escapeHtml(session.id)}" title="Rename">✎</button><button data-session-action="duplicate" data-action-session-id="${escapeHtml(session.id)}" title="Duplicate">⧉</button><button data-session-action="export" data-action-session-id="${escapeHtml(session.id)}" title="Export">⇩</button><button data-session-action="delete" data-action-session-id="${escapeHtml(session.id)}" title="Delete">×</button></div></div>`;
+      return `<div class="session-item ${session.id === activeSessionId ? "active" : ""}" data-session-search="${escapeHtml(search)}"${hidden}>
+        <button class="session-item-open" data-session-id="${escapeHtml(session.id)}" role="menuitem" ${historyBusy ? "disabled" : ""}>
+          <span class="session-item-main">
+            <b>${escapeHtml(session.title || "Untitled session")}</b>
+            <small>${escapeHtml(session.activeMode)} · ${escapeHtml(session.modelId)} · ${formatSessionDate(session.updatedAt)}</small>
+          </span>
+          <span class="session-item-status ${session.status}">${session.id === activeSessionId ? "open" : session.status === "waiting_for_approval" ? "waiting" : ""}</span>
+        </button>
+        <div class="session-item-actions" aria-label="Session actions">
+          <button type="button" class="session-action-btn" data-session-action="rename" data-action-session-id="${escapeHtml(session.id)}" title="Rename session">✎</button>
+          <button type="button" class="session-action-btn" data-session-action="duplicate" data-action-session-id="${escapeHtml(session.id)}" title="Duplicate session">⧉</button>
+          <button type="button" class="session-action-btn" data-session-action="export" data-action-session-id="${escapeHtml(session.id)}" title="Export session">⇩</button>
+          <button type="button" class="session-action-btn delete-btn" data-session-action="delete" data-action-session-id="${escapeHtml(session.id)}" title="Delete session">×</button>
+        </div>
+      </div>`;
     }).join("")
     : `<p class="session-empty">No recent sessions in this workspace.</p>`;
   return `
@@ -2487,7 +2507,7 @@ function sessionMenu(): string {
         <span>Start New Session</span>
       </button>
       <input id="session-search" class="session-search" type="search" value="${escapeHtml(historyQuery)}" placeholder="Search title, mode, or model…" aria-label="Search sessions">
-      ${items}
+      <div class="session-list">${items}</div>
     </div>`;
 }
 
@@ -2495,11 +2515,13 @@ function wireSessionMenuInteractions(): void {
   document.querySelectorAll<HTMLButtonElement>("#session-menu-container [data-action=new]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
+      e.stopPropagation();
       startNewSession();
     });
   });
   document.querySelector<HTMLButtonElement>("#session-menu-container [data-action=refresh-sessions]")?.addEventListener("click", (e) => {
     e.preventDefault();
+    e.stopPropagation();
     vscode.postMessage({ type: "listSessions" });
   });
   document.querySelector<HTMLInputElement>("#session-search")?.addEventListener("input", (event) => {
@@ -2511,6 +2533,7 @@ function wireSessionMenuInteractions(): void {
   });
   document.querySelectorAll<HTMLButtonElement>("#session-menu-container [data-session-id]").forEach((button) => button.addEventListener("click", (e) => {
     e.preventDefault();
+    e.stopPropagation();
     const sessionId = button.dataset.sessionId;
     if (!sessionId || historyBusy) return;
     historyBusy = true;
@@ -2520,13 +2543,17 @@ function wireSessionMenuInteractions(): void {
   }));
   document.querySelectorAll<HTMLButtonElement>("#session-menu-container [data-session-action]").forEach((button) => button.addEventListener("click", (e) => {
     e.preventDefault();
+    e.stopPropagation();
     const sessionId = button.dataset.actionSessionId;
     const action = button.dataset.sessionAction;
     if (!sessionId || historyBusy) return;
     if (action === "rename") vscode.postMessage({ type: "renameSession", sessionId });
     if (action === "duplicate") vscode.postMessage({ type: "duplicateSession", sessionId });
     if (action === "export") vscode.postMessage({ type: "exportSession", sessionId });
-    if (action === "delete") vscode.postMessage({ type: "deleteSession", sessionId });
+    if (action === "delete") {
+      historyBusy = true;
+      vscode.postMessage({ type: "deleteSession", sessionId });
+    }
   }));
 }
 

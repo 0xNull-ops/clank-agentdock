@@ -974,17 +974,23 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async renameSession(sessionId: string): Promise<void> {
-    const session = await this.persistence.getSession(sessionId);
-    if (!session) return this.post({ type: "error", kind: "workspace", message: "That session is not available in this workspace." });
-    const title = await vscode.window.showInputBox({
-      title: "Rename Agent Harness session",
-      value: session.title,
-      prompt: "Use a short title that will be easy to find later.",
-      validateInput: (value) => !value.trim() ? "Enter a session title." : [...value.trim()].length > 200 ? "Use 200 characters or fewer." : undefined,
-    });
-    if (title === undefined) return;
-    await this.persistence.renameSession(sessionId, title);
-    await this.postSessionList();
+    try {
+      const session = await this.persistence.getSession(sessionId);
+      if (!session) {
+        this.post({ type: "error", kind: "workspace", message: "That session is not available in this workspace." });
+        return;
+      }
+      const title = await vscode.window.showInputBox({
+        title: "Rename Agent Harness session",
+        value: session.title,
+        prompt: "Use a short title that will be easy to find later.",
+        validateInput: (value) => !value.trim() ? "Enter a session title." : [...value.trim()].length > 200 ? "Use 200 characters or fewer." : undefined,
+      });
+      if (title === undefined) return;
+      await this.persistence.renameSession(sessionId, title);
+    } finally {
+      await this.postSessionList();
+    }
   }
 
   private async duplicateSession(sessionId: string): Promise<void> {
@@ -997,41 +1003,62 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async deleteSession(sessionId: string): Promise<void> {
-    if (this.runtime.isRunning(sessionId)) return this.post({ type: "error", kind: "workspace", message: "Cancel the active run before deleting this session." });
-    const session = await this.persistence.getSession(sessionId);
-    if (!session) return this.post({ type: "error", kind: "workspace", message: "That session is not available in this workspace." });
-    const confirmed = await vscode.window.showWarningMessage(
-      `Delete “${session.title}” and its local transcript?`,
-      { modal: true, detail: "This removes messages, tool records, approvals, and usage stored by Agent Harness." },
-      "Delete",
-    );
-    if (confirmed !== "Delete") return;
-    this.runtime.cancel(sessionId);
-    if (!await this.persistence.deleteSession(sessionId)) return;
-    await this.deleteSelectedSkills(sessionId);
-    if (sessionId === this.sessionId) await this.startNewSession();
-    else await this.postSessionList();
+    try {
+      if (this.runtime.isRunning(sessionId)) {
+        this.post({ type: "error", kind: "workspace", message: "Cancel the active run before deleting this session." });
+        return;
+      }
+      const session = await this.persistence.getSession(sessionId);
+      if (!session) {
+        this.post({ type: "error", kind: "workspace", message: "That session is not available in this workspace." });
+        return;
+      }
+      const confirmed = await vscode.window.showWarningMessage(
+        `Delete “${session.title}” and its local transcript?`,
+        { modal: true, detail: "This removes messages, tool records, approvals, and usage stored by Agent Harness." },
+        "Delete",
+      );
+      if (confirmed !== "Delete") return;
+      this.runtime.cancel(sessionId);
+      await this.persistence.deleteSession(sessionId);
+      await this.deleteSelectedSkills(sessionId);
+      if (sessionId === this.sessionId) {
+        await this.startNewSession();
+      }
+    } finally {
+      await this.postSessionList();
+    }
   }
 
   private async exportSession(sessionId: string): Promise<void> {
-    if (this.runtime.isRunning(sessionId)) return this.post({ type: "error", kind: "workspace", message: "Wait for the active run to finish, or cancel it before exporting." });
-    const exported = await this.persistence.exportSession(sessionId);
-    if (!exported) return this.post({ type: "error", kind: "workspace", message: "That session is not available in this workspace." });
-    const format = await vscode.window.showQuickPick([
-      { label: "Markdown", description: "Readable transcript without provider-private frames", extension: "md" as const },
-      { label: "JSON", description: "Structured safe export without provider-private frames", extension: "json" as const },
-    ], { title: "Export Agent Harness session" });
-    if (!format) return;
-    const slug = exported.session.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "agent-session";
-    const uri = await vscode.window.showSaveDialog({
-      title: "Export Agent Harness session",
-      defaultUri: vscode.Uri.file(`${slug}.${format.extension}`),
-      filters: format.extension === "md" ? { Markdown: ["md"] } : { JSON: ["json"] },
-    });
-    if (!uri) return;
-    const body = format.extension === "json" ? `${JSON.stringify(exported, null, 2)}\n` : sessionMarkdown(exported);
-    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(body));
-    void vscode.window.showInformationMessage(`Exported “${exported.session.title}”.`);
+    try {
+      if (this.runtime.isRunning(sessionId)) {
+        this.post({ type: "error", kind: "workspace", message: "Wait for the active run to finish, or cancel it before exporting." });
+        return;
+      }
+      const exported = await this.persistence.exportSession(sessionId);
+      if (!exported) {
+        this.post({ type: "error", kind: "workspace", message: "That session is not available in this workspace." });
+        return;
+      }
+      const format = await vscode.window.showQuickPick([
+        { label: "Markdown", description: "Readable transcript without provider-private frames", extension: "md" as const },
+        { label: "JSON", description: "Structured safe export without provider-private frames", extension: "json" as const },
+      ], { title: "Export Agent Harness session" });
+      if (!format) return;
+      const slug = exported.session.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "agent-session";
+      const uri = await vscode.window.showSaveDialog({
+        title: "Export Agent Harness session",
+        defaultUri: vscode.Uri.file(`${slug}.${format.extension}`),
+        filters: format.extension === "md" ? { Markdown: ["md"] } : { JSON: ["json"] },
+      });
+      if (!uri) return;
+      const body = format.extension === "json" ? `${JSON.stringify(exported, null, 2)}\n` : sessionMarkdown(exported);
+      await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(body));
+      void vscode.window.showInformationMessage(`Exported “${exported.session.title}”.`);
+    } finally {
+      await this.postSessionList();
+    }
   }
 
   private async pickContext(): Promise<void> {
