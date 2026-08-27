@@ -1,107 +1,76 @@
-# Freebuff Agent Harness — VS Code shell
+# Clank-Harness — VS Code & IDE Extension
 
-This package is the VS Code-facing shell for the harness. It intentionally
-does not own provider or tool execution logic. The extension host is a thin
-adapter around the typed UI boundary in `src/shared/protocol.ts`; the agent
-runtime can be connected later by forwarding normalized events to
-`ExtensionToUiMessage`.
+> **Local-first, provider-agnostic coding agent harness for VS Code and compatible IDEs.**
 
-## Local development
+Clank-Harness provides a rich, responsive sidebar chat interface with multi-modal vision, 1-click provider connections, customizable subagent routing, dynamic skills discovery, atomic checkpoints, and formal plan management.
 
-From this directory, install the package dependencies and run:
+---
 
-```sh
-npm run typecheck
-npm run compile
-npm test
+> [!NOTE]
+> **Marketplace Notice**: Clank-Harness is not on the VS Code Marketplace yet. Install it directly using the instructions below.
+
+---
+
+## 📦 Installation via VSIX
+
+### Fast Install via CLI:
+```bash
+# Standard VS Code
+code --install-extension clank-harness.vsix
+
+# Cursor
+cursor --install-extension clank-harness.vsix
+
+# Antigravity IDE
+antigravity-ide --install-extension clank-harness.vsix
 ```
 
-The extension contributes an Agent Harness activity-bar view and the
-`Agent Harness: Open Chat` command. Its webview uses the Forge design tokens
-from `specs/forge-agent-design-tokens.json`, mapped to VS Code theme variables
-where available so it remains legible in light and dark hosts.
+### Install via UI:
+1. Open the Extensions pane (`Cmd+Shift+X` / `Ctrl+Shift+X`).
+2. Click the **`...`** (Views and More Actions) menu in the top right.
+3. Select **Install from VSIX…** and select `clank-harness.vsix`.
+4. Run **Developer: Reload Window** from the Command Palette (`Cmd+Shift+P`).
 
-## Configure a provider
+---
 
-Run `Agent Harness: Manage Providers` to add one or more OpenAI-compatible
-profiles, choose defaults, maintain manual model metadata, and test or fetch the
-provider's model catalog. A mode may pin a provider profile and fixed/preferred
-model. API keys are stored only in VS Code SecretStorage. Legacy
-`agentdock.provider.*` settings are imported without deleting their original
-values.
+## ⚙️ Providers & Setup
 
-## Personalized agents and modes
+Open **Settings (⚙) → Providers** in the Clank sidebar panel:
 
-Run `Agent Harness: Manage Agents / Modes` to create, duplicate, edit, reset,
-delete, import, or export executable Markdown modes. Global definitions live in
-`~/.config/freebuff-agent-harness/agents/*.md`; project definitions live in
-`.agent/agents/*.md`. The extension also reads `.opencode/agents/*.md` and
-`.kilo/agents/*.md` as compatibility sources but never edits those files.
+### 1. Freebuff Quick Connect (1-Click)
+* Click **`🌐 1. Open Freebuff Login (freebuff.llm.pm)`** to get your token.
+* Paste the `authToken` into the input and click **`🚀 Connect & Auto-Start`**.
+* Clank automatically manages the local sidecar proxy, securely stores your token in VS Code `SecretStorage`, and discovers all available models (`gpt-5.6-luna`, `deepseek-v4-flash`, `minimax-m3`, `mimo-2.5`, `glm-5.3-flash`, `gemini-3.1-flash-lite`).
 
-Definitions are resolved as built-in → global → project and update live. A
-custom mode can select tools, permissions, file/command/MCP patterns, skills,
-default editor context, response shape, provider/model policy, step budget, and
-delegation authority. Project definitions are ignored until the workspace is
-trusted. If a persisted mode becomes missing or invalid, the session is blocked
-until the user explicitly selects an installed mode; it never silently runs as
-Ask.
+### 2. VibeProxy Quick Connect (1-Click)
+* If you run VibeProxy locally on port `8317`, click **`🚀 Connect VibeProxy & Pull Live Models`**.
+* Automatically detects and lists live models from your connected accounts (Claude Code, Codex, Gemini, Kimi, Qwen, etc.).
 
-The runtime registers guarded file/search tools, dedicated Git reads, VS Code
-diagnostics, atomic writes/edits/patches, and bounded classified commands.
-Ask/Plan/Review stay read-only; Implement exposes mutations through the
-provider-independent permission and approval flow. An untrusted workspace can
-still use read-only chat while mutation tools remain unavailable.
+### 3. Custom OpenAI-Compatible & Local Engines
+* Use the preset buttons or click **`＋ Add Provider Profile`** for OpenAI, OpenRouter, DeepSeek, Ollama (`http://localhost:11434/v1`), vLLM (`http://localhost:8000/v1`), LM Studio, or custom gateways.
 
-Sessions, provider replay frames, steps, usage, approvals, and tool results are
-stored in SQLite below VS Code global storage. The header history control can
-switch among recent workspace sessions without sending opaque replay state to
-the webview.
+---
 
-Every primary runtime turn is bracketed by `CheckpointCoordinator.beginTurn`
-and `completeTurn`; approved write-capable subagent turns are additionally
-bracketed with `runWithCheckpoint`. Changed turns produce a checkpoint card with file-level counts and
-native VS Code diff/revert actions. Snapshot content is served through the
-`agentdock-checkpoint:` virtual-document scheme; revert refuses to overwrite
-workspace drift and reports the affected paths in the chat.
+## 🌟 Core Workflows
 
-## Formal plan lifecycle
+* **🖼️ Multi-Modal Vision**: Paste screenshots directly (`Cmd+V` / `Ctrl+V`) into the chat composer, or click `📷 image` to attach image files.
+* **✦ Skills Selection**: Click `✦ skills` to choose and inspect active skills loaded from your workspace (`.agent/skills`) or global folders (`~/.agents/skills`), with origin folder paths clearly labeled.
+* **🤖 Custom Agents & Modes**: Create project-scoped (`.agent/agents/*.md`) or global (`~/.config/freebuff-agent-harness/agents/*.md`) agent definitions with tailored prompts, tools, step limits, and subagent routing.
+* **📋 Plan & Implement**: Use **Plan** mode to draft architectural solutions. Once reviewed, click **Approve & Implement** to execute the plan with dedicated tools and real-time step budgets.
+* **↔ Checkpoints & Diff Revert**: Every write turn is checkpointed. Review file diffs or revert changes safely without losing session context.
 
-Plan mode writes Markdown artifacts under `.agent/plans/*.md` (with all
-required headings). After each Plan-mode run the extension host scans those
-artifacts, reconciles them with durable workspace/session-scoped plan rows in
-SQLite, and surfaces a sanitized plan card: title, status, and revision only —
-Markdown bodies, absolute paths, and provider frames never reach the webview.
+---
 
-Statuses follow `DRAFT → READY_FOR_APPROVAL → APPROVED → IMPLEMENTING →
-COMPLETE` (with `BLOCKED` and `SUPERSEDED` side paths). When a plan is
-`READY_FOR_APPROVAL` the card offers **Save Plan**, **Revise Plan**, **Discard**,
-and **Approve & Implement**. Approve & Implement atomically persists the
-approval (recording `approvedAt`/`approvedBy`), switches to Implement while
-preserving the conversation, and records a `plan-approved` mode transition.
-Implement turns then load only the approved plan's compact contract into the
-system prompt and mark the plan `IMPLEMENTING`; a clean run marks it `COMPLETE`,
-while errors and cancellations never claim completion. The webview only ever
-sends `planId` plus `revision` — plan body, path, and content are host-owned
-and validated against the current revision so stale actions fail closed.
+## 💻 Development
 
-## Webview bundle and startup safety
+```bash
+# Run tests
+npm test
 
-The webview is bundled by esbuild into a single classic script loaded from a
-strict nonce CSP (`default-src 'none'`). Keeping the output free of ES-module
-syntax is load-bearing: the shell uses a plain `<script src>` tag, so module
-syntax would throw and leave the panel blank. The bundle smoke and the
-`webview-mount` test both assert this invariant. A visible startup-failure
-surface with a correlation id renders if the webview ever fails before its
-first paint, instead of showing a silent blank panel.
+# Typecheck and compile
+npm run typecheck
+npm run compile
 
-## Runtime seam
-
-The shell sends `UiToExtensionMessage` commands (`sendMessage`, mode/model
-changes, approval decisions, and context changes). `src/runtime/bridge.ts`
-adapts those commands to `runAgent` and `OpenAICompatibleProvider`, forwarding
-streamed text, tool activity, approvals, usage, cancellation, and normalized
-provider errors as `ExtensionToUiMessage` events. Keeping this seam explicit
-means a future CLI or alternate UI can reuse the same session protocol without
-depending on Webview APIs. The extension host is bundled into a self-contained
-`dist/extension.js`; only the VS Code API remains external, and the sql.js WASM
-is copied alongside it.
+# Smoke test the classic webview bundle
+npm run smoke:bundle
+```

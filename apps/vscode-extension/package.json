@@ -1,6 +1,6 @@
 {
-  "name": "freebuff-agent-harness-vscode",
-  "displayName": "Clank",
+  "name": "clank-harness",
+  "displayName": "Clank-Harness",
   "description": "A local-first, provider-agnostic coding agent harness for VS Code.",
   "version": "0.1.0",
   "private": true,
