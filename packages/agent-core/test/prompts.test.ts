@@ -33,4 +33,12 @@ describe("prompt composition", () => {
     expect(prompt).not.toContain("# Workspace instructions");
     expect(prompt).not.toContain("# Approved plan");
   });
+
+  test("includes custom mode context policy and response template", () => {
+    const mode = { ...BUILT_IN_MODES[0], defaultContextSources: ["diagnostics", "active-file"], responseTemplate: "Return findings, then follow-ups." };
+    const prompt = composeSystemPrompt({ mode });
+    expect(prompt).toContain("# Default context policy");
+    expect(prompt).toContain("diagnostics, active-file");
+    expect(prompt).toContain("# Response template\nReturn findings, then follow-ups.");
+  });
 });

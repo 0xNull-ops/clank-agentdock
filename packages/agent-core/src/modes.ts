@@ -13,6 +13,14 @@ export const READ_TOOLS = [
   "task",
 ];
 export const IMPLEMENT_TOOLS = [...READ_TOOLS, "write_file", "edit_file", "apply_patch", "run_command"];
+/**
+ * Plan may write only dedicated `.agent/plans` artifacts; the pattern-level
+ * tool list is still required so the registry advertises the write tools the
+ * mode's path-scoped permission policy already governs.
+ */
+export const PLAN_TOOLS = [...READ_TOOLS, "write_file", "edit_file", "apply_patch"];
+/** Architect writes only architecture/ADR documents via its path-scoped policy. */
+export const ARCHITECT_TOOLS = PLAN_TOOLS;
 const SAFE_READ_COMMANDS = {
   "*": "deny" as const,
   "git status*": "allow" as const,
@@ -65,6 +73,22 @@ const NO_WRITE: PermissionPolicy = {
   task: "deny",
 };
 
+/**
+ * Write baseline for modes that may mutate only dedicated artifacts. The
+ * `edit`/`write`/`apply_patch` entries are path-scoped pattern maps instead of
+ * plain denies, so the pattern evaluation wins over any tool-name string rule:
+ * permissionKeysForTool() lists the tool name first, which means a direct
+ * "write_file": "deny" would shadow the pattern map and make the mode unable
+ * to write its own artifacts.
+ */
+const SCOPED_WRITE_BASE: PermissionPolicy = {
+  ...READ_PERMISSION,
+  delete: "deny",
+  delete_file: "deny",
+  move_file: "deny",
+  task: "allow",
+};
+
 function mode(partial: Pick<ModeDefinition, "name" | "slug" | "instructions" | "steps" | "permission"> & Partial<ModeDefinition>): ModeDefinition {
   return {
     ...partial,
@@ -101,15 +125,15 @@ export const BUILT_IN_MODES: readonly ModeDefinition[] = [
     colorToken: "color.semantic.mode.plan",
     instructions: "Investigate deeply and produce a concrete plan. Only write dedicated .agent/plans artifacts; do not implement production code.",
     steps: 20,
-    tools: READ_TOOLS,
+    tools: PLAN_TOOLS,
     delegationAllowed: true,
     allowedAgents: ["explore", "research", "test"],
     delegationEffects: "read-only",
     permission: {
-      ...NO_WRITE,
-      task: "allow",
+      ...SCOPED_WRITE_BASE,
       edit: { ".agent/plans/**": "allow", "*": "deny" },
       write: { ".agent/plans/**": "allow", "*": "deny" },
+      apply_patch: { ".agent/plans/**": "allow", "*": "deny" },
     },
   }),
   mode({
@@ -121,15 +145,15 @@ export const BUILT_IN_MODES: readonly ModeDefinition[] = [
     instructions: "Focus on interfaces, invariants, data flow, security, concurrency, and migration tradeoffs. Do not implement app code.",
     steps: 24,
     reasoningEffort: "high",
-    tools: READ_TOOLS,
+    tools: ARCHITECT_TOOLS,
     delegationAllowed: true,
     allowedAgents: ["explore", "research", "test"],
     delegationEffects: "read-only",
     permission: {
-      ...NO_WRITE,
-      task: "allow",
+      ...SCOPED_WRITE_BASE,
       edit: { ".agent/architecture/**": "allow", "docs/architecture/**": "allow", "docs/adr/**": "allow", "*": "deny" },
       write: { ".agent/architecture/**": "allow", "docs/architecture/**": "allow", "docs/adr/**": "allow", "*": "deny" },
+      apply_patch: { ".agent/architecture/**": "allow", "docs/architecture/**": "allow", "docs/adr/**": "allow", "*": "deny" },
     },
   }),
   mode({
@@ -211,19 +235,26 @@ export const BUILT_IN_MODES: readonly ModeDefinition[] = [
     delegationEffects: "write",
     permission: { ...NO_WRITE, task: "allow" },
   }),
+  mode({
+    name: "Custom",
+    slug: "custom",
+    description: "A safe starting point for a user-defined executable mode.",
+    type: "primary",
+    colorToken: "color.semantic.mode.custom",
+    instructions: "Follow the user request within this read-only baseline. Create a named custom mode to define broader tools and policy.",
+    steps: 20,
+    tools: READ_TOOLS,
+    permission: NO_WRITE,
+  }),
 ];
 
-export const CUSTOM_MODE_DEFAULTS: ModeDefinition = mode({
-  name: "Custom",
-  slug: "custom",
-  description: "A user-defined executable mode.",
+export const CUSTOM_MODE_DEFAULTS: ModeDefinition = {
+  ...BUILT_IN_MODES.find((candidate) => candidate.slug === "custom")!,
   type: "all",
-  colorToken: "color.semantic.mode.custom",
   instructions: "Follow the custom mode instructions and its explicit policy.",
-  steps: 20,
   tools: [],
   permission: {},
-});
+};
 
 export function slugify(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "custom";
@@ -234,10 +265,16 @@ export function mergeMode(base: ModeDefinition, override: Partial<ModeDefinition
     ...base,
     ...override,
     permission: mergeObject(base.permission, override.permission ?? {}),
-    tools: override.toolsMode === "replace" ? [...(override.tools ?? [])] : [...(override.tools ?? base.tools)],
-    skills: override.skillsMode === "replace" ? [...(override.skills ?? [])] : [...(override.skills ?? base.skills)],
+    tools: mergeList(base.tools, override.tools, override.toolsMode),
+    skills: mergeList(base.skills, override.skills, override.skillsMode),
   };
   return merged;
+}
+
+function mergeList(base: readonly string[], override: readonly string[] | undefined, mode: "merge" | "replace" | undefined): string[] {
+  if (!override) return [...base];
+  if (mode === "replace") return [...override];
+  return [...new Set([...base, ...override])];
 }
 
 function mergeObject<T extends Record<string, any>>(base: T, override: Partial<T>): T {

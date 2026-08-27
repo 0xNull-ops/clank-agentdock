@@ -129,11 +129,29 @@ function directRule(policy: PermissionPolicy, key: string, target: string): { ef
   if (!rule || typeof rule === "string" || typeof rule !== "object" || Array.isArray(rule)) return asEffect(rule);
   if ("pattern" in rule) {
     const patterned = rule as { pattern?: unknown; effect?: PermissionEffect; reason?: string };
-    return typeof patterned.pattern === "string" && patterned.effect && globMatches(patterned.pattern, target)
+    return typeof patterned.pattern === "string" && patterned.effect && policyPatternMatches(patterned.pattern, target)
       ? { effect: patterned.effect!, reason: patterned.reason }
       : undefined;
   }
   return asEffect(rule);
+}
+
+/** Ordered policy aliases bridge provider-facing tool names and spec vocabulary. */
+export function permissionKeysForTool(toolName: string): string[] {
+  const normalized = toolName.toLowerCase();
+  const keys = [normalized];
+  if (["write_file", "edit_file", "apply_patch", "delete_file", "move_file"].includes(normalized)) keys.push("edit", "write");
+  else if (["read_file", "read_files", "list_directory", "glob", "grep", "tree", "get_diagnostics", "lsp", "semantic_search"].includes(normalized)) keys.push("read");
+  else if (normalized === "run_command") keys.push("bash", "shell");
+  else if (normalized.startsWith("git_")) keys.push("git_read", "git");
+  else if (normalized.startsWith("mcp_")) keys.push("mcp");
+  const lexical = normalized.split("_")[0];
+  if (!keys.includes(lexical)) keys.push(lexical);
+  return keys;
+}
+
+function policyPatternMatches(pattern: string, target: string): boolean {
+  return pattern.trim() === "*" || globMatches(pattern, target);
 }
 
 function ruleSpecificity(pattern: string): number {
@@ -162,21 +180,18 @@ function isReadOnly(toolName: string): boolean {
 function findPolicyRule(policy: PermissionPolicy | undefined, request: PermissionRequest): { effect: PermissionEffect; reason?: string } | undefined {
   if (!policy) return undefined;
   const target = request.command ?? request.path ?? request.toolName;
-  const direct = directRule(policy, request.toolName, target);
-  if (direct) return direct;
-  const category = request.toolName.split("_")[0];
-  const categoryRule = directRule(policy, category, target);
-  if (categoryRule) return categoryRule;
-
-  const value = policy[request.toolName] ?? policy[category];
-  if (!value || typeof value === "string" || (typeof value === "object" && "effect" in value)) return undefined;
-  const candidates = Object.entries(value)
-    .filter(([pattern, rule]) => globMatches(pattern, target) && asEffect(rule))
-    .map(([pattern, rule], index) => ({ pattern, index, specificity: ruleSpecificity(pattern), ...asEffect(rule)! }))
-    // A deny is never weakened by an equally specific allow. For equal effects,
-    // the later declaration wins, making ordered policy files deterministic.
-    .sort((a, b) => b.specificity - a.specificity || (a.effect === "deny" ? -1 : b.effect === "deny" ? 1 : b.index - a.index));
-  return candidates[0] ? { effect: candidates[0].effect, reason: candidates[0].reason } : undefined;
+  for (const key of permissionKeysForTool(request.toolName)) {
+    const direct = directRule(policy, key, target);
+    if (direct) return direct;
+    const value = policy[key];
+    if (!value || typeof value === "string" || (typeof value === "object" && "effect" in value)) continue;
+    const candidates = Object.entries(value)
+      .filter(([pattern, rule]) => policyPatternMatches(pattern, target) && asEffect(rule))
+      .map(([pattern, rule], index) => ({ pattern, index, specificity: ruleSpecificity(pattern), ...asEffect(rule)! }))
+      .sort((a, b) => b.specificity - a.specificity || (a.effect === "deny" ? -1 : b.effect === "deny" ? 1 : b.index - a.index));
+    if (candidates[0]) return { effect: candidates[0].effect, reason: candidates[0].reason };
+  }
+  return undefined;
 }
 
 /**

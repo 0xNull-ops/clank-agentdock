@@ -4,7 +4,7 @@
  * the same contract.
  */
 
-export type AgentMode =
+export type BuiltInAgentMode =
   | "ask"
   | "plan"
   | "architect"
@@ -13,6 +13,9 @@ export type AgentMode =
   | "review"
   | "orchestrate"
   | "custom";
+
+/** Built-ins plus validated project/global Markdown mode slugs. */
+export type AgentMode = BuiltInAgentMode | (string & {});
 
 export type RunState = "idle" | "running" | "awaiting_approval" | "cancelled" | "complete" | "error";
 
@@ -32,6 +35,10 @@ export type UiToExtensionMessage =
   | { type: "changeModel"; modelId: string }
   | { type: "approveTool"; approvalId: string }
   | { type: "denyTool"; approvalId: string }
+  | { type: "approvePlan"; planId: string; revision: number }
+  | { type: "revisePlan"; planId: string; revision: number }
+  | { type: "savePlan"; planId: string; revision: number }
+  | { type: "discardPlan"; planId: string; revision: number }
   | { type: "openCheckpointDiff"; checkpointId: string; path?: string }
   | { type: "revertCheckpoint"; checkpointId: string }
   | { type: "removeContext"; refId: string }
@@ -56,6 +63,14 @@ export interface ModelPolicyView {
   reason?: string;
 }
 
+export interface ModeOption {
+  id: AgentMode;
+  label: string;
+  description: string;
+  colorToken?: string;
+  source?: "built-in" | "global" | "project";
+}
+
 /** UI-safe metadata for a recent workspace session. */
 export interface SessionHistoryItem {
   id: string;
@@ -67,12 +82,25 @@ export interface SessionHistoryItem {
   status: "idle" | "running" | "waiting_for_approval" | "cancelled" | "error";
 }
 
+export type PlanStatus = "DRAFT" | "READY_FOR_APPROVAL" | "APPROVED" | "IMPLEMENTING" | "BLOCKED" | "COMPLETE" | "SUPERSEDED" | "DISCARDED";
+
+/** Sanitized plan metadata. Markdown and absolute artifact paths stay host-side. */
+export interface PlanView {
+  id: string;
+  title: string;
+  status: PlanStatus;
+  revision: number;
+  artifactLabel: string;
+  updatedAt: number;
+}
+
 export type ExtensionToUiMessage =
-  | { type: "initialize"; sessionId: string; mode: AgentMode; modelId: string; modelPolicy: ModelPolicyView; models: ModelOption[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; workspaceName?: string }
+  | { type: "initialize"; sessionId: string; mode: AgentMode; modeOptions: ModeOption[]; modelId: string; modelPolicy: ModelPolicyView; models: ModelOption[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView; workspaceName?: string }
   | { type: "sessionList"; sessions: SessionHistoryItem[]; activeSessionId: string }
-  | { type: "sessionOpened"; session: SessionHistoryItem; modelPolicy: ModelPolicyView; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[] }
+  | { type: "sessionOpened"; session: SessionHistoryItem; modeOptions: ModeOption[]; modelPolicy: ModelPolicyView; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView }
   | { type: "contextAdded"; ref: ContextRef }
   | { type: "modeChanged"; mode: AgentMode }
+  | { type: "modesChanged"; modes: ModeOption[] }
   | { type: "modelChanged"; modelId: string }
   | { type: "modelPolicyChanged"; modelPolicy: ModelPolicyView }
   | { type: "modelsChanged"; models: ModelOption[] }
@@ -82,6 +110,7 @@ export type ExtensionToUiMessage =
   | { type: "toolCall"; tool: ToolActivity }
   | { type: "subagentUpdate"; subagent: SubagentActivity }
   | { type: "approvalRequired"; approval: ToolApproval }
+  | { type: "planChanged"; plan?: PlanView }
   | { type: "checkpointSummary"; checkpoint: CheckpointSummaryCard }
   | { type: "checkpointReverted"; checkpointId: string; summary: CheckpointSummaryCard }
   | { type: "checkpointRevertConflict"; checkpointId: string; paths: string[]; message: string }
@@ -148,7 +177,7 @@ export interface CheckpointSummaryCard {
   files: CheckpointSummaryFile[];
 }
 
-export const BUILT_IN_MODES: ReadonlyArray<{ id: AgentMode; label: string; description: string }> = [
+export const BUILT_IN_MODES: ReadonlyArray<ModeOption> = [
   { id: "ask", label: "Ask", description: "Understand and explain without editing" },
   { id: "plan", label: "Plan", description: "Explore and shape an implementation plan" },
   { id: "architect", label: "Architect", description: "Decide boundaries, interfaces, and tradeoffs" },

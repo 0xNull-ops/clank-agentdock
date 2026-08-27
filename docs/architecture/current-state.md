@@ -43,15 +43,24 @@ Implemented in this milestone:
 - fixed/preferred/user-selectable model policies with provider availability fallback
 - isolated subagent execution with per-turn concurrency/depth budgets, explicit write-spawn approval,
   serialized child writers, durable lifecycle records, cancellation, and restored activity cards
+- host-owned custom-mode registry with built-in/global/project precedence, live reload,
+  compatibility imports, diagnostics, managed Markdown CRUD, arbitrary persisted slugs,
+  provider/model routing, prompt skills/default context/templates, and policy pattern enforcement
 - guarded workspace reads/search, atomic write/edit/patch tools, bounded shell execution,
   command classification, and dedicated Git read tools
 - generated Forge CSS variables with VS Code dark, light, and high-contrast mappings
+- formal Plan lifecycle: workspace/session-scoped durable plan rows with revision,
+  status, content hash, and compact contract; Plan/Architect path-scoped artifact writes;
+  artifact reconciliation; host-owned approve/revise/save/discard with optimistic
+  revision checks and `approvedAt`/`approvedBy`; `plan-approved` mode transition;
+  approved-contract handoff to Implement with IMPLEMENTING/COMPLETE transitions
+- webview bundled as a classic script (blank-panel fix) with a visible
+  startup-failure surface and correlation id
 
 Deliberately deferred until the vertical slice is hardened:
 
 - delete/move tools and a stronger command/network sandbox
-- plan approval artifacts
-- custom-mode editor and full YAML validation
+- a full visual custom-mode form beyond the current creation wizard and raw Markdown editor
 - isolated worktrees, MCP, semantic search, and workflow presets
 
 ## Invariants

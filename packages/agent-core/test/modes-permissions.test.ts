@@ -4,7 +4,7 @@ import { PermissionEngine, globMatches, normalizePath } from "../src/permissions
 
 describe("mode definitions", () => {
   test("ships all executable built-in modes with distinct budgets", () => {
-    expect(BUILT_IN_MODES.map((item) => item.slug)).toEqual(["ask", "plan", "architect", "implement", "debug", "review", "orchestrate"]);
+    expect(BUILT_IN_MODES.map((item) => item.slug)).toEqual(["ask", "plan", "architect", "implement", "debug", "review", "orchestrate", "custom"]);
     expect(BUILT_IN_MODES.find((item) => item.slug === "debug")?.steps).toBe(50);
   });
 
@@ -58,6 +58,33 @@ Write only documentation files.`);
     expect(transition.to).toBe("implement");
     expect(() => manager.transition("ask", "missing", "user")).toThrow("Unknown mode");
   });
+
+  test("Plan mode may write only inside .agent/plans and cannot escape it", () => {
+    const plan = BUILT_IN_MODES.find((item) => item.slug === "plan")!;
+    const engine = new PermissionEngine({ mode: plan.permission });
+    // Allowed: dedicated plan artifacts, including nested subdirectories.
+    expect(engine.evaluate({ toolName: "write_file", path: ".agent/plans/2026-08-27-add-plans.md" }).effect).toBe("allow");
+    expect(engine.evaluate({ toolName: "write_file", path: ".agent/plans/sub/plan.md" }).effect).toBe("allow");
+    expect(engine.evaluate({ toolName: "edit_file", path: ".agent/plans/plan.md" }).effect).toBe("allow");
+    expect(engine.evaluate({ toolName: "apply_patch", path: ".agent/plans/plan.md" }).effect).toBe("allow");
+    // Denied: production code, unrelated directories, and escape attempts.
+    expect(engine.evaluate({ toolName: "write_file", path: "src/app.ts" }).effect).toBe("deny");
+    expect(engine.evaluate({ toolName: "write_file", path: ".agent/plans/../src/app.ts" }).effect).toBe("deny");
+    expect(engine.evaluate({ toolName: "write_file", path: ".agent/plans.md" }).effect).toBe("deny");
+    expect(engine.evaluate({ toolName: "edit_file", path: ".agent/plans" }).effect).toBe("deny");
+  });
+
+  test("Architect mode writes only its own architecture and ADR directories", () => {
+    const architect = BUILT_IN_MODES.find((item) => item.slug === "architect")!;
+    const engine = new PermissionEngine({ mode: architect.permission });
+    for (const path of [".agent/architecture/adr.md", "docs/architecture/adr.md", "docs/adr/adr-001.md"]) {
+      expect(engine.evaluate({ toolName: "write_file", path }).effect).toBe("allow");
+    }
+    // Plan artifacts are outside Architect scope, as is production code.
+    expect(engine.evaluate({ toolName: "write_file", path: ".agent/plans/plan.md" }).effect).toBe("deny");
+    expect(engine.evaluate({ toolName: "write_file", path: "src/app.ts" }).effect).toBe("deny");
+    expect(engine.evaluate({ toolName: "edit_file", path: ".agent/plans/plan.md" }).effect).toBe("deny");
+  });
 });
 
 describe("permission engine", () => {
@@ -84,6 +111,17 @@ describe("permission engine", () => {
   test("pattern ties are deterministic and deny wins", () => {
     const engine = new PermissionEngine({ mode: { run_command: { "npm t??": "allow", "npm ??st": "deny" } } });
     expect(engine.evaluate({ toolName: "run_command", command: "npm test" }).effect).toBe("deny");
+  });
+
+  test("maps spec edit and bash policy aliases onto runtime tools", () => {
+    const engine = new PermissionEngine({ mode: {
+      edit: { "db/**": "ask", "*": "deny" },
+      bash: { "npm test*": "allow", "*": "deny" },
+    } });
+    expect(engine.evaluate({ toolName: "apply_patch", path: "db/schema.sql" }).effect).toBe("ask");
+    expect(engine.evaluate({ toolName: "write_file", path: "src/nested/view.ts" }).effect).toBe("deny");
+    expect(engine.evaluate({ toolName: "run_command", command: "npm test -- unit" }).effect).toBe("allow");
+    expect(engine.evaluate({ toolName: "run_command", command: "node script.js" }).effect).toBe("deny");
   });
 
   test("canonicalizes relative traversal before matching", () => {

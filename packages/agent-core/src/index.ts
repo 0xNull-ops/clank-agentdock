@@ -5,3 +5,4 @@ export * from "./agent-loop";
 export * from "./prompts";
 export * from "./subagents";
 export * from "./model-resolution";
+export * from "./mode-registry";

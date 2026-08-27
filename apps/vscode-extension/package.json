@@ -23,7 +23,8 @@
     "onCommand:agentdock.clearApiKey",
     "onCommand:agentdock.validateProvider",
     "onCommand:agentdock.refreshModels",
-    "onCommand:agentdock.manageProviders"
+    "onCommand:agentdock.manageProviders",
+    "onCommand:agentdock.manageModes"
   ],
   "main": "./dist/extension.js",
   "dependencies": {
@@ -59,6 +60,10 @@
       {
         "command": "agentdock.manageProviders",
         "title": "Agent Harness: Manage Providers"
+      },
+      {
+        "command": "agentdock.manageModes",
+        "title": "Agent Harness: Manage Agents / Modes"
       }
     ],
     "viewsContainers": {
@@ -85,17 +90,9 @@
         "agentdock.defaultMode": {
           "type": "string",
           "default": "ask",
-          "enum": [
-            "ask",
-            "plan",
-            "architect",
-            "implement",
-            "debug",
-            "review",
-            "orchestrate",
-            "custom"
-          ],
-          "description": "Mode used when a new Agent Harness session starts."
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+          "examples": ["ask", "plan", "implement", "orchestrate", "database-specialist"],
+          "description": "Built-in or custom mode slug used when a new Agent Harness session starts."
         },
         "agentdock.defaultModel": {
           "type": "string",
@@ -186,7 +183,7 @@
   "scripts": {
     "tokens": "node ../../scripts/build-design-tokens.mjs",
     "build:packages": "tsc -p ../../packages/agent-core/tsconfig.json && tsc -p ../../packages/checkpoints/tsconfig.json && tsc -p ../../packages/providers/openai-compatible/tsconfig.json && tsc -p ../../packages/workspace-tools/tsconfig.json && tsc -p ../../packages/storage/tsconfig.json",
-    "compile": "npm run tokens && npm run build:packages && node ../../scripts/bundle-vscode-extension.mjs && tsc -p ./tsconfig.webview.json && cp src/webview/styles.css src/webview/generated-tokens.css dist/webview/",
+    "compile": "npm run tokens && npm run build:packages && node ../../scripts/bundle-vscode-extension.mjs && tsc -p ./tsconfig.webview.json --noEmit && cp src/webview/styles.css src/webview/generated-tokens.css dist/webview/",
     "test": "bun test test",
     "smoke:bundle": "node ../../scripts/smoke-vscode-bundle.mjs",
     "watch": "tsc -p ./tsconfig.json --watch",

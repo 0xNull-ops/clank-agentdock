@@ -113,6 +113,82 @@ export interface UsageRecord {
 /** Durable lifecycle states for a delegated subagent run. */
 export type SubagentRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "rejected";
 
+/** Durable formal-plan lifecycle from the host plan handoff contract. */
+export type PlanStatus =
+  | "DRAFT"
+  | "READY_FOR_APPROVAL"
+  | "APPROVED"
+  | "IMPLEMENTING"
+  | "BLOCKED"
+  | "COMPLETE"
+  | "SUPERSEDED"
+  | "DISCARDED";
+
+export interface PlanRecord {
+  id: string;
+  workspaceId: string;
+  sessionId: string;
+  title: string;
+  content: string;
+  status: PlanStatus;
+  revision: number;
+  /** Trusted workspace-relative `.agent/plans` path of the Markdown artifact. */
+  artifactPath?: string;
+  /** Stable hash of the persisted Markdown content. */
+  contentHash?: string;
+  /** Serialized compact `PlanContract` used by Implement handoff. */
+  contractJson?: string;
+  createdAt: number;
+  updatedAt: number;
+  approvedAt?: number;
+  approvedBy?: string;
+  supersededBy?: string;
+  discardedAt?: number;
+}
+
+export interface CreatePlanInput {
+  id?: string;
+  workspaceId: string;
+  sessionId: string;
+  title?: string;
+  content: string;
+  status?: PlanStatus;
+  artifactPath?: string;
+  contentHash?: string;
+  contractJson?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface PlanScopeOptions {
+  workspaceId: string;
+  sessionId?: string;
+}
+
+export interface PlanListOptions extends PlanScopeOptions {
+  status?: PlanStatus | readonly PlanStatus[];
+  limit?: number;
+}
+
+export interface PlanPatch {
+  title?: string;
+  content?: string;
+  status?: PlanStatus;
+  artifactPath?: string;
+  contentHash?: string;
+  contractJson?: string;
+  approvedAt?: number;
+  approvedBy?: string;
+  supersededBy?: string;
+  discardedAt?: number;
+}
+
+export interface PlanMutationOptions extends PlanScopeOptions {
+  expectedRevision?: number;
+  actor?: string;
+  supersededBy?: string;
+}
+
 /** Bounded, provider-neutral result data safe to retain with a run record. */
 export interface SubagentResultMetadata {
   summary: string;
@@ -192,6 +268,7 @@ export interface SessionSnapshot {
   approvals: ApprovalRecord[];
   modeTransitions: ModeTransition[];
   usage: UsageRecord[];
+  plans: PlanRecord[];
 }
 
 export interface SessionListOptions {
@@ -219,7 +296,8 @@ export interface TranscriptOptions extends SessionScopeOptions {
   includeProviderFrames?: boolean;
 }
 
-export interface SessionExport extends Omit<SessionSnapshot, "providerMessages"> {
+/** Safe session export: never contains plan Markdown or provider-private rows. */
+export interface SessionExport extends Omit<SessionSnapshot, "providerMessages" | "plans"> {
   providerMessages?: ProviderTranscriptEntry[];
   exportedAt: number;
   truncated: boolean;

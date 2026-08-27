@@ -9,9 +9,12 @@ import type {
   UiToExtensionMessage,
   ModelOption,
   ModelPolicyView,
+  ModeOption,
+  PlanView,
   SessionHistoryItem,
   SubagentActivity,
 } from "../shared/protocol";
+import { BUILT_IN_MODES } from "../shared/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(message: UiToExtensionMessage): void };
 
@@ -20,16 +23,41 @@ const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Agent Harness root element not found");
 const appRoot = root;
 
-const modes: Array<{ id: AgentMode; label: string; description: string }> = [
-  { id: "ask", label: "Ask", description: "Understand and explain without editing" },
-  { id: "plan", label: "Plan", description: "Explore and shape an implementation plan" },
-  { id: "architect", label: "Architect", description: "Decide boundaries, interfaces, and tradeoffs" },
-  { id: "implement", label: "Implement", description: "Edit, run, test, and iterate" },
-  { id: "debug", label: "Debug", description: "Investigate a failure with a hypothesis loop" },
-  { id: "review", label: "Review", description: "Inspect changes and report findings" },
-  { id: "orchestrate", label: "Orchestrate", description: "Coordinate focused subagents" },
-  { id: "custom", label: "Custom", description: "Use a personalized mode definition" }
-];
+/**
+ * Visible startup-failure surface. If anything throws before the first render
+ * (or a future bundle regression reintroduces module syntax), the panel must
+ * show a readable error with a correlation id instead of a silent blank view.
+ */
+const startupCorrelationId = `startup-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+let startupSucceeded = false;
+
+function renderStartupFailure(message: string, detail?: unknown): void {
+  if (startupSucceeded) return;
+  startupSucceeded = true;
+  console.error("Agent Harness webview startup failed", startupCorrelationId, detail ?? "");
+  appRoot.innerHTML = `
+    <section class="startup-failure" role="alert">
+      <div class="startup-failure-icon">!</div>
+      <p class="kicker">AGENT HARNESS</p>
+      <h2>The chat surface could not start.</h2>
+      <p>${escapeHtml(message)}</p>
+      <small>Correlation id: ${escapeHtml(startupCorrelationId)}</small>
+      <button type="button" class="quiet-button" data-action="reload-webview">Reload panel</button>
+    </section>`;
+  document.querySelector<HTMLButtonElement>("[data-action=reload-webview]")?.addEventListener("click", () => location.reload());
+}
+
+window.addEventListener("error", (event) => {
+  if (startupSucceeded) return;
+  const message = event.message || "Unknown script error";
+  renderStartupFailure(message, event.error ?? event);
+});
+window.addEventListener("unhandledrejection", (event) => {
+  if (startupSucceeded) return;
+  renderStartupFailure("An unhandled promise rejection stopped the chat surface.", event.reason);
+});
+
+let modes: ModeOption[] = [...BUILT_IN_MODES];
 let models: ModelOption[] = [
   { id: "openai-compatible", label: "Configure model…", hint: "OpenAI-compatible endpoint" }
 ];
@@ -48,22 +76,33 @@ let messages: ChatMessage[] = [];
 let tools: ToolActivity[] = [];
 let subagents: SubagentActivity[] = [];
 let approval: ToolApproval | undefined;
+let plan: PlanView | undefined;
 let checkpoints: CheckpointSummaryCard[] = [];
 let checkpointConflict: { checkpointId: string; paths: string[]; message: string } | undefined;
 
-render();
+try {
+  render();
+  startupSucceeded = true;
+} catch (error) {
+  renderStartupFailure(error instanceof Error ? error.message : String(error), error);
+  throw error;
+}
+
 window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) => {
   const message = event.data;
   switch (message.type) {
     case "initialize":
       activeSessionId = message.sessionId;
       activeMode = message.mode;
+      modes = message.modeOptions;
       activeModel = message.modelId;
       modelPolicy = message.modelPolicy;
+      if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
       models = message.models;
       messages = message.messages;
       tools = message.tools;
       subagents = message.subagents;
+      plan = message.plan;
       contextRefs = [];
       break;
     case "sessionList":
@@ -74,11 +113,14 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
     case "sessionOpened":
       activeSessionId = message.session.id;
       activeMode = message.session.activeMode;
+      modes = message.modeOptions;
       activeModel = message.session.modelId;
       modelPolicy = message.modelPolicy;
+      if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
       messages = message.messages;
       tools = message.tools;
       subagents = message.subagents;
+      plan = message.plan;
       checkpoints = [];
       checkpointConflict = undefined;
       approval = undefined;
@@ -93,11 +135,15 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
     case "modeChanged":
       activeMode = message.mode;
       break;
+    case "modesChanged":
+      modes = message.modes;
+      break;
     case "modelChanged":
       activeModel = message.modelId;
       break;
     case "modelPolicyChanged":
       modelPolicy = message.modelPolicy;
+      if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
       break;
     case "modelsChanged":
       models = message.models;
@@ -118,6 +164,9 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
     case "approvalRequired":
       approval = message.approval;
       runState = "awaiting_approval";
+      break;
+    case "planChanged":
+      plan = message.plan;
       break;
     case "checkpointSummary":
       checkpoints = [...checkpoints.filter((checkpoint) => checkpoint.id !== message.checkpoint.id), message.checkpoint];
@@ -158,13 +207,13 @@ function render(): void {
       </header>
       ${historyOpen ? sessionMenu() : ""}
       <div class="control-strip">
-        <label class="select-wrap mode-select"><span class="mode-dot mode-${mode.id}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${item.id}" ${item.id === activeMode ? "selected" : ""}>${item.label}</option>`).join("")}</select><span class="chevron">⌄</span></label>
+        <label class="select-wrap mode-select" title="${escapeHtml(`${mode.description} · ${mode.source ?? "unavailable"}`)}"><span class="mode-dot mode-${safeCssToken(mode.id)}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("")}</select><span class="chevron">⌄</span></label>
         <label class="select-wrap model-select ${modelPolicy.policy}" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}"><span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span><span class="sr-only">Model</span><select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span></label>
       </div>
       <div class="status-row"><span class="status-dot ${runState === "running" ? "pulse" : ""}"></span><span>${statusLabel()}</span><span class="status-spacer"></span><span class="context-label">Context <strong>12%</strong></span><span class="context-track"><span style="width:12%"></span></span></div>
       <div class="rule"></div>
       <section class="transcript" id="transcript" aria-live="polite">
-        ${messages.length === 0 && tools.length === 0 && subagents.length === 0 && checkpoints.length === 0 ? emptyState(mode.label) : `${messages.map(messageCard).join("")}${subagents.map(subagentCard).join("")}${tools.map(toolCard).join("")}${checkpoints.map(checkpointCard).join("")}${approval ? approvalCard(approval) : ""}`}
+        ${messages.length === 0 && tools.length === 0 && subagents.length === 0 && checkpoints.length === 0 && !plan ? emptyState(mode.label) : `${messages.map(messageCard).join("")}${plan ? planCard(plan) : ""}${subagents.map(subagentCard).join("")}${tools.map(toolCard).join("")}${checkpoints.map(checkpointCard).join("")}${approval ? approvalCard(approval) : ""}`}
       </section>
       <footer class="composer-wrap">
         ${contextRefs.length ? `<div class="context-chips">${contextRefs.map(contextChip).join("")}</div>` : ""}
@@ -203,6 +252,13 @@ function subagentCard(item: SubagentActivity): string {
 
 function approvalCard(item: ToolApproval): string {
   return `<article class="approval-card"><div class="approval-heading"><span class="approval-icon">!</span><div><p class="kicker">PERMISSION REQUEST</p><h3>${escapeHtml(item.toolName)}</h3></div><span class="risk ${item.risk}">${item.risk} risk</span></div><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(item.reason)}</small><div class="approval-actions"><button data-action="deny" class="quiet-button">Deny</button><button data-action="approve" class="approve-button">Approve once</button></div></article>`;
+}
+
+function planCard(item: PlanView): string {
+  const actions = item.status === "READY_FOR_APPROVAL"
+    ? `<div class="plan-actions"><button data-action="plan-discard" class="quiet-button">Discard</button><button data-action="plan-save" class="quiet-button">Save Plan</button><button data-action="plan-revise" class="quiet-button">Revise Plan</button><button data-action="plan-approve" class="approve-button">Approve &amp; Implement</button></div>`
+    : `<div class="plan-actions"><button data-action="plan-save" class="quiet-button">Open Plan</button></div>`;
+  return `<article class="plan-card"><div class="plan-heading"><span class="plan-icon">≡</span><div><p class="kicker">PLAN · REVISION ${item.revision}</p><h3>${escapeHtml(item.title)}</h3></div><span class="plan-status ${item.status.toLowerCase()}">${escapeHtml(item.status.replaceAll("_", " "))}</span></div><p>${escapeHtml(item.artifactLabel)}</p>${actions}</article>`;
 }
 
 function checkpointCard(item: CheckpointSummaryCard): string {
@@ -300,7 +356,14 @@ function wireInteractions(): void {
   document.querySelector<HTMLButtonElement>("[data-action=attach]")?.addEventListener("click", () => {
     vscode.postMessage({ type: "pickContext" });
   });
-  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; subagents = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; runState = "idle"; historyOpen = false; vscode.postMessage({ type: "newSession" }); render(); });
+  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; subagents = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; plan = undefined; runState = "idle"; historyOpen = false; vscode.postMessage({ type: "newSession" }); render(); });
+  for (const action of ["approve", "revise", "save", "discard"] as const) {
+    document.querySelector<HTMLButtonElement>(`[data-action=plan-${action}]`)?.addEventListener("click", () => {
+      if (!plan) return;
+      const type = `${action}Plan` as "approvePlan" | "revisePlan" | "savePlan" | "discardPlan";
+      vscode.postMessage({ type, planId: plan.id, revision: plan.revision });
+    });
+  }
 }
 
 function sessionMenu(): string {
@@ -335,6 +398,10 @@ function statusLabel(): string {
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
+}
+
+function safeCssToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 80) || "custom";
 }
 
 vscode.postMessage({ type: "ready" });

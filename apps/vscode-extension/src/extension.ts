@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { NormalizedMessage } from "@freebuff/agent-core";
+import { loadModeRegistry, type ModeDefinition, type NormalizedMessage } from "@freebuff/agent-core";
 import {
   type AgentMode,
   type ExtensionToUiMessage,
@@ -10,8 +10,12 @@ import {
   type ChatMessage,
   type ToolActivity,
   type SubagentActivity,
-  MODEL_OPTIONS
+  type ModeOption,
+  type PlanView,
+  MODEL_OPTIONS,
+  BUILT_IN_MODES,
 } from "./shared/protocol";
+import { planViewForSession } from "./runtime/plan-lifecycle";
 import { AgentRuntimeBridge } from "./runtime/bridge";
 import { SessionPersistenceCoordinator, type RestoredSession } from "./runtime/session-persistence";
 import {
@@ -21,6 +25,7 @@ import {
   type ProviderProfile,
 } from "./runtime/provider-profiles";
 import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
+import { CustomModeStore } from "./runtime/custom-modes";
 import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActivityFromRecord, toolActivitiesFromSnapshot } from "./shared/session-history";
 
 const VIEW_ID = "agentdock.agentView";
@@ -29,51 +34,78 @@ const SESSION_LIST_LIMIT = 2_000;
 let sessionPersistence: SessionPersistenceCoordinator | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  sessionPersistence = await SessionPersistenceCoordinator.open(context);
-  const providerProfiles = await ProviderProfileStore.open(context, { legacyConfiguration: vscode.workspace.getConfiguration("agentdock") });
-  const recent = (await sessionPersistence.list({ limit: 1 }))[0];
-  const restored = recent ? await sessionPersistence.restore(recent.id) : undefined;
-  const replayMessages = recent ? await sessionPersistence.replayMessages(recent.id) : undefined;
-  const snapshot = recent ? await sessionPersistence.openSnapshot(recent.id) : undefined;
-  const restoredSubagents = recent ? (await sessionPersistence.listSubagentRuns(recent.id)).map(subagentActivityFromRecord) : [];
-  const activeProfile = await providerProfiles.getActiveProfile();
-  const provider = new AgentViewProvider(context, sessionPersistence, providerProfiles, restored, replayMessages, snapshot ? toolActivitiesFromSnapshot(snapshot) : [], restoredSubagents, activeProfile ? resolveProfileModel(activeProfile, { mode: restored?.session.activeMode }) : undefined);
+  // Register the view provider up front so the panel always resolves, even if
+  // storage or provider-profile init throws below. A contributed-but-unresolved
+  // view is what produced the blank-panel symptom.
+  const failureProvider = new StartupFailureViewProvider(context.extensionUri, "Agent Harness failed to start.");
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
-      webviewOptions: { retainContextWhenHidden: true }
+    vscode.window.registerWebviewViewProvider(VIEW_ID, failureProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
     }),
-    vscode.workspace.registerTextDocumentContentProvider(CHECKPOINT_DOCUMENT_SCHEME, provider.checkpointDocumentProvider()),
-    provider.checkpointDocumentProvider(),
     vscode.commands.registerCommand("agentdock.open", async () => {
       await vscode.commands.executeCommand("workbench.view.extension.agentdock");
     }),
-    vscode.commands.registerCommand("agentdock.setApiKey", async () => {
-      const active = await providerProfiles.getActiveProfile();
-      if (!active) return provider.manageProviders();
-      const key = await vscode.window.showInputBox({ prompt: "Provider API key", password: true, ignoreFocusOut: true, placeHolder: "Stored securely in VS Code SecretStorage" });
-      if (key === undefined) return;
-      if (!key.trim()) {
-        void vscode.window.showWarningMessage("Agent Harness API key was not changed.");
-        return;
-      }
-      await providerProfiles.setApiKey(active.id, key.trim());
-      void vscode.window.showInformationMessage("Agent Harness API key stored securely.");
-    }),
-    vscode.commands.registerCommand("agentdock.clearApiKey", async () => {
-      const active = await providerProfiles.getActiveProfile();
-      if (!active) return;
-      await providerProfiles.clearApiKey(active.id);
-      void vscode.window.showInformationMessage("Agent Harness API key cleared.");
-    }),
-    vscode.commands.registerCommand("agentdock.validateProvider", async () => {
-      await provider.validateActiveProvider();
-    }),
-    vscode.commands.registerCommand("agentdock.manageProviders", async () => provider.manageProviders()),
-    vscode.commands.registerCommand("agentdock.refreshModels", async () => {
-      await provider.refreshModels(true);
-    }),
-    { dispose: () => { void sessionPersistence?.close(); } }
   );
+
+  try {
+    const sessionPersistenceCoordinator = await SessionPersistenceCoordinator.open(context);
+    sessionPersistence = sessionPersistenceCoordinator;
+    const customModes = await CustomModeStore.open(context);
+    const providerProfiles = await ProviderProfileStore.open(context, { legacyConfiguration: vscode.workspace.getConfiguration("agentdock") });
+    const recent = (await sessionPersistence.list({ limit: 1 }))[0];
+    const restored = recent ? await sessionPersistence.restore(recent.id) : undefined;
+    const replayMessages = recent ? await sessionPersistence.replayMessages(recent.id) : undefined;
+    const snapshot = recent ? await sessionPersistence.openSnapshot(recent.id) : undefined;
+    const restoredSubagents = recent ? (await sessionPersistence.listSubagentRuns(recent.id)).map(subagentActivityFromRecord) : [];
+    const activeProfile = await providerProfiles.getActiveProfile();
+    const provider = new AgentViewProvider(context, sessionPersistence, providerProfiles, customModes, restored, replayMessages, snapshot ? toolActivitiesFromSnapshot(snapshot) : [], restoredSubagents, activeProfile ? resolveProfileModel(activeProfile, { mode: restored?.session.activeMode }) : undefined);
+
+    // Replace the fallback provider with the fully initialized one.
+    context.subscriptions.splice(context.subscriptions.indexOf(failureProvider), 1);
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
+        webviewOptions: { retainContextWhenHidden: true }
+      }),
+      vscode.workspace.registerTextDocumentContentProvider(CHECKPOINT_DOCUMENT_SCHEME, provider.checkpointDocumentProvider()),
+      provider.checkpointDocumentProvider(),
+      vscode.commands.registerCommand("agentdock.setApiKey", async () => {
+        const active = await providerProfiles.getActiveProfile();
+        if (!active) return provider.manageProviders();
+        const key = await vscode.window.showInputBox({ prompt: "Provider API key", password: true, ignoreFocusOut: true, placeHolder: "Stored securely in VS Code SecretStorage" });
+        if (key === undefined) return;
+        if (!key.trim()) {
+          void vscode.window.showWarningMessage("Agent Harness API key was not changed.");
+          return;
+        }
+        await providerProfiles.setApiKey(active.id, key.trim());
+        void vscode.window.showInformationMessage("Agent Harness API key stored securely.");
+      }),
+      vscode.commands.registerCommand("agentdock.clearApiKey", async () => {
+        const active = await providerProfiles.getActiveProfile();
+        if (!active) return;
+        await providerProfiles.clearApiKey(active.id);
+        void vscode.window.showInformationMessage("Agent Harness API key cleared.");
+      }),
+      vscode.commands.registerCommand("agentdock.validateProvider", async () => {
+        await provider.validateActiveProvider();
+      }),
+      vscode.commands.registerCommand("agentdock.manageProviders", async () => provider.manageProviders()),
+      vscode.commands.registerCommand("agentdock.manageModes", async () => provider.manageModes()),
+      vscode.commands.registerCommand("agentdock.refreshModels", async () => {
+        await provider.refreshModels(true);
+      }),
+      customModes,
+      { dispose: () => { void sessionPersistence?.close(); } }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    void vscode.window.showErrorMessage(
+      `Agent Harness failed to start: ${message}`,
+      "Retry",
+    ).then((choice) => {
+      if (choice === "Retry") void vscode.commands.executeCommand("workbench.action.reloadWindow");
+    });
+  }
 }
 
 export async function deactivate(): Promise<void> {
@@ -90,6 +122,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   private restoredMessages: ChatMessage[];
   private restoredTools: ToolActivity[];
   private restoredSubagents: SubagentActivity[];
+  private modeSelectionRequired = false;
+  private acceptedModeSource: string | undefined;
   private sessionOperations: Promise<void> = Promise.resolve();
   private readonly contextSnapshots = new Map<string, { ref: ContextRef; snapshot: string }>();
 
@@ -97,6 +131,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     private readonly context: vscode.ExtensionContext,
     private readonly persistence: SessionPersistenceCoordinator,
     private readonly providerProfiles: ProviderProfileStore,
+    private readonly customModes: CustomModeStore,
     restored?: RestoredSession,
     replayMessages?: NormalizedMessage[],
     restoredTools: ToolActivity[] = [],
@@ -104,7 +139,13 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     initialModelId?: string,
   ) {
     const config = vscode.workspace.getConfiguration("agentdock");
-    this.mode = restored ? normalizeMode(restored.session.activeMode) : normalizeMode(config.get<string>("defaultMode", "ask"));
+    const requestedMode = restored?.session.activeMode ?? config.get<string>("defaultMode", "ask");
+    this.mode = isCanonicalModeSlug(requestedMode) ? requestedMode : "ask";
+    this.acceptedModeSource = restored ? undefined : modeSourceKey(customModes.entry(this.mode));
+    if (restored && (!customModes.get(restored.session.activeMode) || customModes.requiresExplicitReselection(restored.session.activeMode))) {
+      this.modeSelectionRequired = true;
+      void vscode.window.showWarningMessage(`Session mode '${restored.session.activeMode}' is unavailable. Select an installed mode before running.`);
+    }
     this.modelId = restored?.session.modelId
       ?? initialModelId
       ?? (config.get<string>("provider.model", "").trim() || config.get<string>("defaultModel", MODEL_OPTIONS[0].id));
@@ -112,7 +153,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.restoredMessages = restored ? chatMessagesFromNormalized(restored.messages) : [];
     this.restoredTools = restoredTools;
     this.restoredSubagents = restoredSubagents;
-    this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence, providerProfiles);
+    this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence, providerProfiles, customModes);
+    context.subscriptions.push(customModes.onDidChange(() => this.handleModesReloaded()));
     if (restored) this.runtime.restoreHistory(restored.session.id, replayMessages ?? restored.messages);
   }
 
@@ -148,27 +190,39 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           type: "initialize",
           sessionId: this.sessionId,
           mode: this.mode,
+          modeOptions: this.modeOptions(),
           modelId: this.modelId,
           modelPolicy: this.runtime.modelPolicyState(this.mode),
-          models: this.runtime.cachedModelOptions(this.modelId),
+          models: this.runtime.cachedModelOptions(this.modelId, this.mode),
           messages: this.restoredMessages,
           tools: this.restoredTools,
           subagents: this.restoredSubagents,
+          plan: await this.currentPlanView(),
           workspaceName: vscode.workspace.name
         });
+        if (this.modeSelectionRequired) this.post({ type: "error", kind: "workspace", message: `Mode '${this.mode}' is unavailable. Select an installed mode before running.` });
         await this.postSessionList();
         void this.runtime.restoreRecentCheckpointCards();
-        void this.runtime.refreshModels(false);
+        void this.runtime.refreshModels(false, this.customModes.get(this.mode)?.provider);
         return;
       case "changeMode":
         await this.enqueueSessionOperation(async () => {
+          const requestedMode = this.customModes.get(message.mode);
+          if (!requestedMode || (requestedMode.type !== "primary" && requestedMode.type !== "all")) {
+            this.post({ type: "error", kind: "workspace", message: `Mode '${message.mode}' is unavailable. Reload or choose another mode.` });
+            return;
+          }
           this.mode = message.mode;
-          const profile = await this.providerProfiles.getActiveProfile();
-          const modeModel = profile?.modeDefaults[this.mode];
+          this.modeSelectionRequired = false;
+          this.acceptedModeSource = modeSourceKey(this.customModes.entry(this.mode));
+          const definition = this.customModes.get(this.mode)!;
+          const profile = definition.provider ? await this.providerProfiles.getProfile(definition.provider) : await this.providerProfiles.getActiveProfile();
+          const modeModel = definition.model ?? profile?.modeDefaults[this.mode];
           if (modeModel) {
             this.modelId = modeModel;
             this.post({ type: "modelChanged", modelId: this.modelId });
           }
+          this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId, this.mode) });
           this.post({ type: "modeChanged", mode: this.mode });
           this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
           await this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode, ...(modeModel ? { modelId: modeModel } : {}) });
@@ -189,6 +243,11 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         return;
       case "sendMessage":
         await this.enqueueSessionOperation(async () => {
+          const selectedMode = this.customModes.get(message.mode);
+          if (this.modeSelectionRequired || message.mode !== this.mode || !selectedMode || (selectedMode.type !== "primary" && selectedMode.type !== "all")) {
+            this.post({ type: "error", kind: "workspace", message: "The selected mode changed or is no longer available. Choose a mode and send again." });
+            return;
+          }
           const context = message.context.flatMap(({ id }) => {
             const stored = this.contextSnapshots.get(id);
             return stored ? [{ ...stored.ref, snapshot: stored.snapshot }] : [];
@@ -241,25 +300,136 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         this.contextSnapshots.delete(message.refId);
         return;
       case "openSettings":
-        await this.manageProviders();
+        await this.manageHarnessSettings();
+        return;
+      case "approvePlan":
+        await this.enqueueSessionOperation(() => this.approvePlan(message.planId, message.revision));
+        return;
+      case "revisePlan":
+        await this.enqueueSessionOperation(() => this.revisePlan(message.planId, message.revision));
+        return;
+      case "savePlan":
+        await this.enqueueSessionOperation(() => this.savePlan(message.planId, message.revision));
+        return;
+      case "discardPlan":
+        await this.enqueueSessionOperation(() => this.discardPlan(message.planId, message.revision));
         return;
     }
+  }
+
+  /** Sanitized plan metadata for the active session, or undefined. */
+  private async currentPlanView(): Promise<PlanView | undefined> {
+    return planViewForSession(await this.persistence.listPlans(this.sessionId));
+  }
+
+  /**
+   * Approve & Implement. The host owns the transition: storage is mutated
+   * atomically with the revision check, then the conversation is preserved and
+   * the mode switches to Implement with a recorded `plan-approved` transition.
+   */
+  private async approvePlan(planId: string, revision: number): Promise<void> {
+    const record = await this.persistence.getPlan(planId, this.sessionId);
+    if (!record) {
+      this.post({ type: "error", kind: "workspace", message: "That plan is not available in this session." });
+      return;
+    }
+    const approved = await this.persistence.approvePlan(planId, { sessionId: this.sessionId, expectedRevision: revision, actor: "user" });
+    if (!approved) {
+      this.post({ type: "error", kind: "workspace", message: "The plan could not be approved. Reload it and try again." });
+      await this.postPlanChanged();
+      return;
+    }
+    // Switch to Implement, preserving the conversation and recording the reason.
+    this.mode = "implement";
+    this.modeSelectionRequired = false;
+    this.acceptedModeSource = modeSourceKey(this.customModes.entry(this.mode));
+    const definition = this.customModes.get(this.mode);
+    const profile = definition?.provider ? await this.providerProfiles.getProfile(definition.provider) : await this.providerProfiles.getActiveProfile();
+    const modeModel = definition?.model ?? profile?.modeDefaults[this.mode];
+    if (modeModel) {
+      this.modelId = modeModel;
+      this.post({ type: "modelChanged", modelId: this.modelId });
+    }
+    this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId, this.mode) });
+    this.post({ type: "modeChanged", mode: this.mode });
+    this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
+    await this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode }, { reason: "plan-approved" });
+    await this.postPlanChanged();
+  }
+
+  private async revisePlan(planId: string, revision: number): Promise<void> {
+    const record = await this.persistence.getPlan(planId, this.sessionId);
+    if (!record) {
+      this.post({ type: "error", kind: "workspace", message: "That plan is not available in this session." });
+      return;
+    }
+    await this.persistence.revisePlan(planId, { sessionId: this.sessionId, expectedRevision: revision });
+    await this.postPlanChanged();
+  }
+
+  private async discardPlan(planId: string, revision: number): Promise<void> {
+    const record = await this.persistence.getPlan(planId, this.sessionId);
+    if (!record) {
+      this.post({ type: "error", kind: "workspace", message: "That plan is not available in this session." });
+      return;
+    }
+    await this.persistence.discardPlan(planId, { sessionId: this.sessionId, expectedRevision: revision });
+    await this.postPlanChanged();
+  }
+
+  /**
+   * Save Plan opens the host-owned artifact (never trusting webview content)
+   * and refreshes the sanitized card; if a DRAFT/READY plan exists it is kept
+   * as the durable record. Reparses the artifact when present so the card
+   * reflects the latest on-disk Markdown.
+   */
+  private async savePlan(planId: string, revision: number): Promise<void> {
+    const record = await this.persistence.getPlan(planId, this.sessionId);
+    if (!record) {
+      this.post({ type: "error", kind: "workspace", message: "That plan is not available in this session." });
+      return;
+    }
+    if (record.artifactPath) {
+      const uri = vscode.Uri.joinPath(this.workspaceRoot(), record.artifactPath);
+      try {
+        await vscode.workspace.fs.stat(uri);
+        await vscode.window.showTextDocument(uri, { preview: false });
+      } catch {
+        this.post({ type: "error", kind: "workspace", message: "The plan artifact could not be opened." });
+      }
+    }
+    await this.postPlanChanged();
+  }
+
+  private async postPlanChanged(): Promise<void> {
+    this.post({ type: "planChanged", plan: await this.currentPlanView() });
+  }
+
+  /** First workspace folder, or undefined when no folder is open. */
+  private workspaceRoot(): vscode.Uri {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) throw new Error("Plan artifacts require an open workspace folder.");
+    return folder.uri;
   }
 
   private async startNewSession(): Promise<void> {
     const previousSessionId = this.sessionId;
     this.runtime.reset(previousSessionId);
+    if (this.modeSelectionRequired || !this.customModes.get(this.mode)) this.mode = "ask";
     const session = await this.persistence.newSession({ activeMode: this.mode, modelId: this.modelId });
     this.sessionId = session.id;
     this.restoredMessages = [];
     this.restoredTools = [];
     this.contextSnapshots.clear();
+    this.modeSelectionRequired = false;
+    this.acceptedModeSource = modeSourceKey(this.customModes.entry(this.mode));
     this.post({
       type: "initialize",
       sessionId: this.sessionId,
       mode: this.mode,
+      modeOptions: this.modeOptions(),
       modelId: this.modelId,
-      models: this.runtime.cachedModelOptions(this.modelId),
+      models: this.runtime.cachedModelOptions(this.modelId, this.mode),
       modelPolicy: this.runtime.modelPolicyState(this.mode),
       messages: [],
       tools: [],
@@ -311,7 +481,11 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     const restoredSubagents = (await this.persistence.listSubagentRuns(sessionId)).map(subagentActivityFromRecord);
     this.runtime.reset(previousSessionId);
     this.sessionId = restored.session.id;
-    this.mode = normalizeMode(restored.session.activeMode);
+    this.mode = isCanonicalModeSlug(restored.session.activeMode) ? restored.session.activeMode : "ask";
+    this.acceptedModeSource = undefined;
+    if (!this.customModes.get(restored.session.activeMode) || this.customModes.requiresExplicitReselection(restored.session.activeMode)) {
+      this.modeSelectionRequired = true;
+    } else this.modeSelectionRequired = false;
     this.modelId = restored.session.modelId;
     this.restoredMessages = chatMessagesFromNormalized(restored.messages);
     this.restoredTools = snapshot ? toolActivitiesFromSnapshot(snapshot) : [];
@@ -321,12 +495,15 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.post({
       type: "sessionOpened",
       session: sessionHistoryItemFromSession(restored.session),
+      modeOptions: this.modeOptions(),
       modelPolicy: this.runtime.modelPolicyState(this.mode),
       messages: this.restoredMessages,
       tools: this.restoredTools,
       subagents: this.restoredSubagents,
+      plan: await this.currentPlanView(),
     });
     this.post({ type: "runState", state: "idle" });
+    if (this.modeSelectionRequired) this.post({ type: "error", kind: "workspace", message: `Session mode '${restored.session.activeMode}' is unavailable. Select an installed mode before running.` });
     await this.postSessionList();
   }
 
@@ -461,6 +638,134 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     if (picked.profile) return this.manageProviderProfile(picked.profile);
   }
 
+  public async manageModes(): Promise<void> {
+    type ModePick = vscode.QuickPickItem & { entry?: ReturnType<CustomModeStore["entries"]>[number]; action?: "new" | "import" | "reload" | "diagnostics" };
+    const diagnostics = this.customModes.diagnostics();
+    const picked = await vscode.window.showQuickPick<ModePick>([
+      { label: "$(add) New mode", description: "Create a global or project Markdown agent", action: "new" },
+      { label: "$(cloud-download) Import mode…", description: "Copy a Markdown agent into a managed directory", action: "import" },
+      { label: "$(refresh) Reload modes", description: "Re-read global and workspace definitions", action: "reload" },
+      ...(diagnostics.length ? [{ label: `$(warning) View ${diagnostics.length} diagnostic${diagnostics.length === 1 ? "" : "s"}`, description: "Invalid, shadowed, or overridden definitions", action: "diagnostics" as const }] : []),
+      ...this.customModes.entries().map((entry) => ({
+        label: `${entry.scope === "built-in" ? "$(symbol-class)" : entry.scope === "project" ? "$(root-folder)" : "$(home)"} ${entry.mode.name}`,
+        description: `${entry.mode.slug} · ${entry.scope}`,
+        detail: entry.mode.description ?? entry.source,
+        entry,
+      })),
+    ], { title: "Agent Harness agents / modes", placeHolder: "Create or manage executable agent profiles" });
+    if (!picked) return;
+    if (picked.action === "new") return this.createMode();
+    if (picked.action === "import") return this.importMode();
+    if (picked.action === "reload") {
+      await this.customModes.reload();
+      return void vscode.window.showInformationMessage("Agent Harness modes reloaded.");
+    }
+    if (picked.action === "diagnostics") return this.showModeDiagnostics();
+    if (picked.entry) return this.manageModeEntry(picked.entry);
+  }
+
+  private async manageHarnessSettings(): Promise<void> {
+    const picked = await vscode.window.showQuickPick([
+      { label: "$(organization) Agents / Modes", description: "Custom prompts, tools, permissions, models, and delegation", id: "modes" as const },
+      { label: "$(server-environment) Providers", description: "Endpoints, credentials, models, and compatibility", id: "providers" as const },
+      { label: "$(settings-gear) Extension Settings", description: "Budgets, defaults, and compatibility options", id: "settings" as const },
+    ], { title: "Agent Harness settings" });
+    if (picked?.id === "modes") return this.manageModes();
+    if (picked?.id === "providers") return this.manageProviders();
+    if (picked?.id === "settings") await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:freebuff.freebuff-agent-harness-vscode");
+  }
+
+  private async createMode(seed?: ModeDefinition): Promise<void> {
+    const name = await vscode.window.showInputBox({ title: seed ? "Duplicate mode" : "New Agent Harness mode", prompt: "Display name", value: seed ? `${seed.name} Copy` : "", validateInput: requiredInput });
+    if (!name) return;
+    const slug = await vscode.window.showInputBox({ title: "Mode slug", value: safeModeSlug(seed ? `${seed.slug}-copy` : name), validateInput: validateModeSlug });
+    if (!slug) return;
+    const scope = await vscode.window.showQuickPick([
+      { label: "Project", description: ".agent/agents — shared with this workspace", id: "project" as const },
+      { label: "Global", description: "~/.config/freebuff-agent-harness/agents", id: "user" as const },
+    ], { title: "Mode scope" });
+    if (!scope) return;
+    const type = await vscode.window.showQuickPick(["primary", "subagent", "all"] as const, { title: "Where can this mode run?", placeHolder: seed?.type ?? "all" });
+    if (!type) return;
+    const model = await vscode.window.showInputBox({ title: "Preferred model (optional)", value: seed?.model ?? "", prompt: "Use the provider model id; leave empty for profile/session selection" });
+    if (model === undefined) return;
+    const modelPolicy = await vscode.window.showQuickPick(["user-selectable", "preferred", "fixed"] as const, { title: "Model policy", placeHolder: seed?.modelPolicy ?? "user-selectable" });
+    if (!modelPolicy) return;
+    if (modelPolicy === "fixed" && !model.trim()) return void vscode.window.showErrorMessage("A fixed mode must declare a model.");
+    const stepsText = await vscode.window.showInputBox({ title: "Maximum agent steps", value: String(seed?.steps ?? 20), validateInput: optionalPositiveInteger });
+    if (!stepsText) return;
+    const instructions = await vscode.window.showInputBox({ title: "System instructions", value: seed?.instructions ?? "", prompt: "Describe the role, priorities, and boundaries", validateInput: requiredInput });
+    if (!instructions) return;
+    const authority = await vscode.window.showQuickPick([
+      { label: "Read only", description: "Workspace inspection, search, diagnostics, and Git reads", id: "read" as const },
+      { label: "Coding with approval", description: "Read plus edits, patches, commands, and checkpoints", id: "write" as const },
+    ], { title: "Tool and permission baseline" });
+    if (!authority) return;
+    const markdown = modeMarkdown({
+      ...(seed ?? {}),
+      name: name.trim(), slug: slug.trim(), type: type as ModeDefinition["type"], model: model.trim() || undefined,
+      modelPolicy: modelPolicy as ModeDefinition["modelPolicy"], steps: Number(stepsText), instructions: instructions.trim(),
+      ...modeAuthority(authority.id),
+    });
+    const uri = await this.customModes.create(scope.id, markdown, slug);
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document, { preview: false });
+    void vscode.window.showInformationMessage(`Created mode “${name.trim()}”. Advanced policy is available in its Markdown frontmatter.`);
+  }
+
+  private async manageModeEntry(entry: ReturnType<CustomModeStore["entries"]>[number]): Promise<void> {
+    const canManage = this.customModes.canManage(entry);
+    const action = await vscode.window.showQuickPick([
+      ...(canManage ? [{ label: "$(edit) Edit raw Markdown", id: "edit" as const }] : []),
+      { label: "$(copy) Duplicate", id: "duplicate" as const },
+      { label: "$(export) Export", id: "export" as const },
+      ...(canManage ? [{ label: BUILT_IN_MODES.some((mode) => mode.id === entry.mode.slug) ? "$(discard) Reset built-in override" : "$(trash) Delete custom mode", id: "delete" as const }] : []),
+    ], { title: entry.mode.name, placeHolder: entry.mode.description });
+    if (!action) return;
+    if (action.id === "edit") return this.customModes.openSource(entry);
+    if (action.id === "duplicate") return this.createMode(entry.mode);
+    if (action.id === "delete") {
+      const confirmed = await vscode.window.showWarningMessage(`Delete mode “${entry.mode.name}”?`, { modal: true, detail: entry.source }, "Delete");
+      if (confirmed === "Delete") await this.customModes.delete(entry);
+      return;
+    }
+    const uri = await vscode.window.showSaveDialog({ title: `Export ${entry.mode.name}`, defaultUri: vscode.Uri.file(`${entry.mode.slug}.md`), filters: { Markdown: ["md"] } });
+    if (uri) await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(modeMarkdown(entry.mode)));
+  }
+
+  private async importMode(): Promise<void> {
+    const source = (await vscode.window.showOpenDialog({ canSelectMany: false, filters: { Markdown: ["md"] }, openLabel: "Import mode" }))?.[0];
+    if (!source) return;
+    const markdown = new TextDecoder().decode(await vscode.workspace.fs.readFile(source));
+    const scope = await vscode.window.showQuickPick([
+      { label: "Project", id: "project" as const },
+      { label: "Global", id: "user" as const },
+    ], { title: "Import mode scope" });
+    if (!scope) return;
+    const preview = loadModeRegistry({ [scope.id]: [{ content: markdown, source: source.toString(true), scope: scope.id }], builtInCollision: "override" });
+    const imported = preview.entries.find((entry) => entry.scope === scope.id);
+    if (!imported || preview.diagnostics.some((item) => item.severity === "error")) {
+      return void vscode.window.showErrorMessage(`Mode import failed: ${preview.diagnostics.map((item) => item.message).join("; ") || "No custom definition found."}`);
+    }
+    const uri = await this.customModes.create(scope.id, markdown, imported.mode.slug);
+    void vscode.window.showInformationMessage(`Imported “${imported.mode.name}” to ${uri.fsPath}.`);
+  }
+
+  private async showModeDiagnostics(): Promise<void> {
+    const diagnostics = this.customModes.diagnostics();
+    if (!diagnostics.length) return void vscode.window.showInformationMessage("No custom mode diagnostics.");
+    const picked = await vscode.window.showQuickPick(diagnostics.map((item) => ({ label: `${item.severity === "error" ? "$(error)" : "$(warning)"} ${item.message}`, description: item.source, diagnostic: item })), { title: "Custom mode diagnostics" });
+    if (picked?.diagnostic.source) {
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(picked.diagnostic.source, true));
+      const editor = await vscode.window.showTextDocument(document, { preview: false });
+      if (picked.diagnostic.line) {
+        const position = new vscode.Position(Math.max(0, picked.diagnostic.line - 1), 0);
+        editor.selection = new vscode.Selection(position, position);
+        editor.revealRange(new vscode.Range(position, position));
+      }
+    }
+  }
+
   public async validateActiveProvider(): Promise<void> {
     const profile = await this.providerProfiles.getActiveProfile();
     if (!profile) return void vscode.window.showErrorMessage("Add or activate a provider profile first.");
@@ -555,11 +860,11 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       if (!modelId) return;
       await this.providerProfiles.updateProfile(profile.id, { defaultModel: modelId.trim() });
     } else if (action.id === "mode") {
-      const mode = await vscode.window.showQuickPick(["ask", "plan", "architect", "implement", "debug", "review", "orchestrate", "custom"], { title: "Choose mode" });
+      const mode = await vscode.window.showQuickPick(this.modeOptions().map((item) => ({ label: item.label, description: item.description, id: item.id })), { title: "Choose mode" });
       if (!mode) return;
-      const modelId = await vscode.window.showInputBox({ title: `Default model · ${mode}`, value: profile.modeDefaults[mode] ?? profile.defaultModel, validateInput: requiredInput });
+      const modelId = await vscode.window.showInputBox({ title: `Default model · ${mode.label}`, value: profile.modeDefaults[mode.id] ?? profile.defaultModel, validateInput: requiredInput });
       if (!modelId) return;
-      await this.providerProfiles.updateProfile(profile.id, { modeDefaults: { ...profile.modeDefaults, [mode]: modelId.trim() } });
+      await this.providerProfiles.updateProfile(profile.id, { modeDefaults: { ...profile.modeDefaults, [mode.id]: modelId.trim() } });
     } else if (action.id === "edit") {
       const name = await vscode.window.showInputBox({ title: "Edit provider", prompt: "Display name", value: profile.name, validateInput: requiredInput });
       if (!name) return;
@@ -597,7 +902,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     } else if (action.id === "fetch") {
       const models = await this.runtime.refreshModels(false, profile.id);
       if (!models) return void vscode.window.showErrorMessage(`Could not fetch models from ${profile.name}. Check its endpoint and credentials.`);
-      if (active) this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId) });
+      if (active || this.customModes.get(this.mode)?.provider === profile.id) this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId, this.mode) });
       void vscode.window.showInformationMessage(`Fetched ${models.length} model${models.length === 1 ? "" : "s"} from ${profile.name}.`);
     } else if (action.id === "delete") {
       const confirmation = await vscode.window.showWarningMessage(`Delete provider profile “${profile.name}”?`, { modal: true }, "Delete");
@@ -613,14 +918,17 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async refreshProviderSelection(): Promise<void> {
-    const profile = await this.providerProfiles.getActiveProfile();
-    const model = profile ? resolveProfileModel(profile, { mode: this.mode }) : undefined;
+    const definition = this.customModes.get(this.mode);
+    const profile = definition?.provider
+      ? await this.providerProfiles.getProfile(definition.provider)
+      : await this.providerProfiles.getActiveProfile();
+    const model = definition?.model ?? (profile ? resolveProfileModel(profile, { mode: this.mode }) : undefined);
     if (model) {
       this.modelId = model;
       await this.persistence.updateSessionSelection(this.sessionId, { modelId: model });
       this.post({ type: "modelChanged", modelId: model });
     }
-    this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId) });
+    this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId, this.mode) });
     this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
   }
 
@@ -632,19 +940,61 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     return Array.isArray(payload.data) ? payload.data : [];
   }
 
+  private modeOptions(): ModeOption[] {
+    const installed = this.customModes.options();
+    return this.modeSelectionRequired && !this.customModes.get(this.mode)
+      ? [{ id: this.mode, label: `Unavailable · ${this.mode}`, description: "This session's mode definition is missing or invalid." }, ...installed]
+      : installed;
+  }
+
+  private async handleModesReloaded(): Promise<void> {
+    const entry = this.customModes.entry(this.mode);
+    const source = modeSourceKey(entry);
+    if (entry && (!this.modeSelectionRequired || (this.acceptedModeSource !== undefined && this.acceptedModeSource === source))) {
+      this.acceptedModeSource = source;
+      this.post({ type: "modesChanged", modes: this.modeOptions() });
+      const profile = entry.mode.provider ? await this.providerProfiles.getProfile(entry.mode.provider) : await this.providerProfiles.getActiveProfile();
+      const modeModel = entry.mode.model ?? profile?.modeDefaults[entry.mode.slug];
+      if (modeModel) {
+        this.modelId = modeModel;
+        await this.persistence.updateSessionSelection(this.sessionId, { modelId: modeModel });
+        this.post({ type: "modelChanged", modelId: modeModel });
+      }
+      this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId, this.mode) });
+      this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
+      return;
+    }
+    const previous = this.mode;
+    this.modeSelectionRequired = true;
+    this.post({ type: "modesChanged", modes: this.modeOptions() });
+    this.post({ type: "modeChanged", mode: this.mode });
+    this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
+    this.post({ type: "error", kind: "workspace", message: `Mode '${previous}' was removed, shadowed, or changed source, so this session must explicitly select an installed mode before running.` });
+  }
+
   private post(message: ExtensionToUiMessage): void {
     void this.view?.webview.postMessage(message);
   }
 
   private renderHtml(webview: vscode.Webview): string {
-    const nonce = getNonce();
-    const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, "dist", "webview", "main.js")
-    );
-    const styleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, "dist", "webview", "styles.css")
-    );
-    return `<!doctype html>
+    return renderWebviewHtml(this.context.extensionUri, webview);
+  }
+}
+
+function modeSourceKey(entry: ReturnType<CustomModeStore["entry"]>): string | undefined {
+  return entry ? `${entry.scope}:${entry.source ?? entry.mode.slug}` : undefined;
+}
+
+/** Render the single shared webview shell with a strict nonce CSP. */
+export function renderWebviewHtml(extensionUri: vscode.Uri, webview: vscode.Webview): string {
+  const nonce = getNonce();
+  const scriptUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, "dist", "webview", "main.js")
+  );
+  const styleUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, "dist", "webview", "styles.css")
+  );
+  return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -658,6 +1008,38 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
+}
+
+/**
+ * Fallback view shown when the extension host cannot finish activation (for
+ * example, storage or sql.js WASM init fails). Registration happens before the
+ * heavy init so the view always resolves; this provider surfaces a visible,
+ * actionable error instead of a silently blank panel.
+ */
+class StartupFailureViewProvider implements vscode.WebviewViewProvider {
+  private view?: vscode.WebviewView;
+
+  public constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly message: string,
+  ) {}
+
+  public resolveWebviewView(view: vscode.WebviewView): void {
+    this.view = view;
+    view.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
+    };
+    view.webview.html = renderWebviewHtml(this.extensionUri, view.webview);
+    view.webview.onDidReceiveMessage((message: unknown) => {
+      if (message && typeof message === "object" && (message as { type?: unknown }).type === "ready") {
+        void view.webview.postMessage({ type: "error", kind: "workspace", message: this.message });
+      }
+    });
+  }
+
+  public dispose(): void {
+    this.view = undefined;
   }
 }
 
@@ -666,9 +1048,8 @@ function getNonce(): string {
   return Array.from({ length: 32 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
 }
 
-function normalizeMode(value: string): AgentMode {
-  const valid: AgentMode[] = ["ask", "plan", "architect", "implement", "debug", "review", "orchestrate", "custom"];
-  return valid.includes(value as AgentMode) ? (value as AgentMode) : "ask";
+function isCanonicalModeSlug(value: string): boolean {
+  return validateModeSlug(value) === undefined;
 }
 
 function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
@@ -690,7 +1071,7 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
     case "exportSession":
       return typeof message.sessionId === "string" && message.sessionId.length > 0 && message.sessionId.length <= 256;
     case "changeMode":
-      return typeof message.mode === "string" && normalizeMode(message.mode) === message.mode;
+      return typeof message.mode === "string" && validateModeSlug(message.mode) === undefined;
     case "changeModel":
       return typeof message.modelId === "string" && message.modelId.length > 0 && message.modelId.length <= 256;
     case "approveTool":
@@ -705,12 +1086,23 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
       return typeof message.checkpointId === "string" && message.checkpointId.length > 0 && message.checkpointId.length <= 256;
     case "removeContext":
       return typeof message.refId === "string" && message.refId.length <= 256;
+    case "approvePlan":
+    case "revisePlan":
+    case "savePlan":
+    case "discardPlan":
+      return typeof message.planId === "string"
+        && message.planId.length > 0
+        && message.planId.length <= 256
+        && typeof message.revision === "number"
+        && Number.isSafeInteger(message.revision)
+        && message.revision >= 1
+        && message.revision <= 1_000_000;
     case "sendMessage":
       return typeof message.text === "string"
         && message.text.length > 0
         && message.text.length <= 100_000
         && typeof message.mode === "string"
-        && normalizeMode(message.mode) === message.mode
+        && validateModeSlug(message.mode) === undefined
         && typeof message.modelId === "string"
         && message.modelId.length > 0
         && message.modelId.length <= 256
@@ -720,6 +1112,81 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
     default:
       return false;
   }
+}
+
+function safeModeSlug(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64) || "custom";
+}
+
+function validateModeSlug(value: string): string | undefined {
+  return /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(value.trim()) ? undefined : "Use 1–64 lowercase letters, numbers, and single dashes.";
+}
+
+function modeAuthority(authority: "read" | "write"): Pick<ModeDefinition, "tools" | "permission" | "skills" | "delegationAllowed" | "allowedAgents" | "delegationEffects"> {
+  if (authority === "write") return {
+    tools: ["read*", "list_directory", "glob", "grep", "git_*", "get_diagnostics", "write_file", "edit_file", "apply_patch", "run_command", "task"],
+    permission: {
+      read: "allow", list_directory: "allow", glob: "allow", grep: "allow", git_read: "allow", get_diagnostics: "allow",
+      write_file: "ask", edit_file: "ask", apply_patch: "ask", run_command: { "*": "ask", "git push*": "deny" }, task: "allow",
+    },
+    skills: [], delegationAllowed: true,
+    allowedAgents: ["explore", "research", "test", "review", "general", "implementer"], delegationEffects: "write",
+  };
+  return {
+    tools: ["read*", "list_directory", "glob", "grep", "git_*", "get_diagnostics", "task"],
+    permission: { read: "allow", list_directory: "allow", glob: "allow", grep: "allow", git_read: "allow", get_diagnostics: "allow", edit: "deny", write: "deny", run_command: "deny", task: "allow" },
+    skills: [], delegationAllowed: true, allowedAgents: ["explore", "research", "test", "review"], delegationEffects: "read-only",
+  };
+}
+
+function modeMarkdown(mode: ModeDefinition): string {
+  const fields: Record<string, unknown> = {
+    name: mode.name,
+    slug: mode.slug,
+    ...(mode.description ? { description: mode.description } : {}),
+    type: mode.type,
+    ...(mode.icon ? { icon: mode.icon } : {}),
+    ...(mode.colorToken ? { colorToken: mode.colorToken } : {}),
+    ...(mode.provider ? { provider: mode.provider } : {}),
+    ...(mode.model ? { model: mode.model } : {}),
+    modelPolicy: mode.modelPolicy ?? "user-selectable",
+    ...(mode.reasoningEffort ? { reasoningEffort: mode.reasoningEffort } : {}),
+    ...(mode.temperature !== undefined ? { temperature: mode.temperature } : {}),
+    ...(mode.topP !== undefined ? { topP: mode.topP } : {}),
+    ...(mode.maxOutputTokens !== undefined ? { maxOutputTokens: mode.maxOutputTokens } : {}),
+    steps: mode.steps,
+    toolsMode: mode.toolsMode ?? "replace",
+    tools: mode.tools,
+    permission: mode.permission,
+    ...(mode.filePatterns?.length ? { filePatterns: mode.filePatterns } : {}),
+    ...(mode.commandPatterns?.length ? { commandPatterns: mode.commandPatterns } : {}),
+    ...(mode.mcpToolPatterns?.length ? { mcpToolPatterns: mode.mcpToolPatterns } : {}),
+    skillsMode: mode.skillsMode ?? "replace",
+    skills: mode.skills,
+    delegationAllowed: mode.delegationAllowed,
+    allowedAgents: mode.allowedAgents,
+    delegationEffects: mode.delegationEffects,
+    ...(mode.defaultContextSources?.length ? { defaultContextSources: mode.defaultContextSources } : {}),
+    ...(mode.responseTemplate ? { responseTemplate: mode.responseTemplate } : {}),
+  };
+  return `---\n${yamlObject(fields)}---\n\n${mode.instructions.trim()}\n`;
+}
+
+function yamlObject(value: Record<string, unknown>, indent = 0): string {
+  const prefix = " ".repeat(indent);
+  return Object.entries(value).map(([key, item]) => {
+    if (Array.isArray(item)) {
+      if (!item.length) return `${prefix}${key}: []\n`;
+      return `${prefix}${key}:\n${item.map((entry) => `${prefix}  - ${yamlScalar(entry)}\n`).join("")}`;
+    }
+    if (item && typeof item === "object") return `${prefix}${key}:\n${yamlObject(item as Record<string, unknown>, indent + 2)}`;
+    return `${prefix}${key}: ${yamlScalar(item)}\n`;
+  }).join("");
+}
+
+function yamlScalar(value: unknown): string {
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(String(value ?? ""));
 }
 
 function sessionMarkdown(exported: Awaited<ReturnType<SessionPersistenceCoordinator["exportSession"]>> & {}): string {

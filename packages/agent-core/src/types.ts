@@ -182,12 +182,66 @@ export interface ModeDefinition {
   steps: number;
   tools: string[];
   permission: PermissionPolicy;
+  /** Optional declarative scopes used by hosts to derive path/command/MCP policy editors. */
+  filePatterns?: string[];
+  commandPatterns?: string[];
+  mcpToolPatterns?: string[];
   skills: string[];
   skillsMode?: "merge" | "replace";
   toolsMode?: "merge" | "replace";
   delegationAllowed: boolean;
   allowedAgents: string[];
   delegationEffects: DelegationEffects;
+  defaultContextSources?: string[];
+  responseTemplate?: string;
+}
+
+/** Durable lifecycle for a formal Plan artifact. */
+export type PlanStatus =
+  | "DRAFT"
+  | "READY_FOR_APPROVAL"
+  | "APPROVED"
+  | "IMPLEMENTING"
+  | "COMPLETE"
+  | "BLOCKED"
+  | "SUPERSEDED";
+
+/**
+ * Structured, provider-independent sections extracted from a formal Plan
+ * artifact. Keeping these fields separate lets Implement consume a compact
+ * contract without copying the full Markdown artifact into every request.
+ */
+export interface PlanContract {
+  goal: string;
+  currentState: string;
+  scope: string;
+  nonGoals: string;
+  proposedChanges: string;
+  filesComponents: string;
+  dataApiChanges: string;
+  stepByStepImplementation: string;
+  tests: string;
+  validation: string;
+  risksEdgeCases: string;
+  rollback: string;
+  acceptanceCriteria: string;
+}
+
+/** Host-owned durable metadata for one revision of a formal Plan artifact. */
+export interface PlanRecord {
+  id: string;
+  sessionId: string;
+  workspaceId: string;
+  status: PlanStatus;
+  revision: number;
+  markdown: string;
+  contract: PlanContract;
+  artifactPath?: string;
+  contentHash?: string;
+  createdAt: number;
+  updatedAt: number;
+  approvedAt?: number;
+  approvedBy?: "user";
 }
 
 export interface ModeTransition {

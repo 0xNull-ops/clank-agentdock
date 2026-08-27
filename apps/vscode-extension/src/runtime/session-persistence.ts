@@ -12,6 +12,9 @@ import {
 import {
   SessionStore,
   type ApprovalRecord,
+  type CreatePlanInput,
+  type PlanMutationOptions,
+  type PlanRecord,
   type SessionListOptions,
   type SessionExport,
   type SessionSnapshot,
@@ -22,6 +25,14 @@ import {
   type SubagentRunPatch,
   type SubagentRunRecord,
 } from "@freebuff/agent-storage";
+import { validatePlanMarkdown, type PlanContract } from "@freebuff/agent-core";
+import {
+  contentHashOf,
+  decideArtifactPlanAction,
+  planContractOf,
+  planTitleFromMarkdown,
+  type PlanArtifactCandidate,
+} from "./plan-lifecycle";
 
 const DEFAULT_DATABASE_NAME = "sessions.sqlite";
 const DEFAULT_TITLE = "New Agent session";
@@ -307,10 +318,169 @@ export class SessionPersistenceCoordinator {
     })));
   }
 
+  // ---- Formal plan lifecycle (host-owned, workspace/session scoped) ----
+
+  private planScope(sessionId?: string): { workspaceId: string; sessionId?: string } {
+    return { workspaceId: this.workspaceId(), ...(sessionId ? { sessionId } : {}) };
+  }
+
+  private planMutationOptions(options: { sessionId?: string; expectedRevision?: number; actor?: string; supersededBy?: string }): PlanMutationOptions {
+    return {
+      workspaceId: this.workspaceId(),
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+      ...(options.expectedRevision !== undefined ? { expectedRevision: options.expectedRevision } : {}),
+      ...(options.actor ? { actor: options.actor } : {}),
+      ...(options.supersededBy ? { supersededBy: options.supersededBy } : {}),
+    };
+  }
+
+  /** Create a durable plan row for a session after validating its workspace scope. */
+  public async createPlanRecord(
+    sessionId: string,
+    input: { title?: string; content: string; artifactPath?: string; status?: PlanRecord["status"] },
+  ): Promise<PlanRecord> {
+    const store = await this.requireStore();
+    const session = await this.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const validation = validatePlanMarkdown(input.content);
+    const contractJson = validation.ok && validation.contract ? JSON.stringify(validation.contract) : undefined;
+    const create: CreatePlanInput = {
+      workspaceId: session.workspaceId,
+      sessionId,
+      title: input.title ?? planTitleFromMarkdown(input.content, input.artifactPath ?? "plan"),
+      content: input.content,
+      status: input.status ?? "DRAFT",
+      ...(input.artifactPath ? { artifactPath: input.artifactPath } : {}),
+      contentHash: contentHashOf(input.content),
+      ...(contractJson ? { contractJson } : {}),
+    };
+    return this.enqueue(() => store.createPlan(create));
+  }
+
+  /** Read one plan without crossing the current workspace boundary. */
+  public getPlan(planId: string, sessionId?: string): Promise<PlanRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.getPlan(planId, this.planScope(sessionId))));
+  }
+
+  /** List plans for the workspace, optionally narrowed to one session. */
+  public listPlans(sessionId?: string): Promise<PlanRecord[]> {
+    return this.enqueue(() => this.requireStore().then((store) => store.listPlans(this.planScope(sessionId))));
+  }
+
+  /** Atomically approve a READY_FOR_APPROVAL plan and record who and when. */
+  public approvePlan(planId: string, options: { sessionId?: string; expectedRevision?: number; actor?: string } = {}): Promise<PlanRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.approvePlan(planId, this.planMutationOptions(options))));
+  }
+
+  /** Send a plan back to DRAFT for revisions. */
+  public revisePlan(planId: string, options: { sessionId?: string; expectedRevision?: number } = {}): Promise<PlanRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.revisePlan(planId, this.planMutationOptions(options))));
+  }
+
+  /** Discard an in-flight plan. */
+  public discardPlan(planId: string, options: { sessionId?: string; expectedRevision?: number } = {}): Promise<PlanRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.discardPlan(planId, this.planMutationOptions(options))));
+  }
+
+  /** Supersede a plan (used when an approved artifact is rewritten). */
+  public supersedePlan(planId: string, options: { expectedRevision?: number; supersededBy?: string } = {}): Promise<PlanRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.supersedePlan(planId, this.planMutationOptions(options))));
+  }
+
+  /** Transition an APPROVED plan to IMPLEMENTING at the start of an Implement turn. */
+  public beginPlanImplementation(planId: string): Promise<PlanRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.beginPlanImplementation(planId, this.planMutationOptions({}))));
+  }
+
+  /** Mark an IMPLEMENTING plan COMPLETE after a successful implement run. */
+  public completePlan(planId: string): Promise<PlanRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.completePlan(planId, this.planMutationOptions({}))));
+  }
+
+  /** Park an IMPLEMENTING plan that surfaced a material deviation. */
+  public blockPlan(planId: string): Promise<PlanRecord | undefined> {
+    return this.enqueue(() => this.requireStore().then((store) => store.blockPlan(planId, this.planMutationOptions({}))));
+  }
+
+  /**
+   * Reconcile a freshly scanned `.agent/plans` artifact with the durable plan
+   * rows for its session. The host owns identity, status, and revisions; an
+   * approved plan is never mutated in place — a changed artifact supersedes it
+   * and starts a new DRAFT/READY_FOR_APPROVAL row.
+   */
+  public async upsertPlanArtifact(sessionId: string, candidate: PlanArtifactCandidate): Promise<PlanRecord | undefined> {
+    const store = await this.requireStore();
+    const session = await this.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const existing = (await this.listPlans(sessionId)).find((plan) => plan.artifactPath === candidate.artifactPath);
+    const validation = validatePlanMarkdown(candidate.content);
+    const decision = decideArtifactPlanAction(existing, candidate, validation.ok);
+    if (decision.action === "skip") return existing;
+    const contractJson = validation.ok && validation.contract ? JSON.stringify(validation.contract) : undefined;
+    const title = planTitleFromMarkdown(candidate.content, candidate.artifactPath);
+    const contentHash = contentHashOf(candidate.content);
+    if (decision.action === "create") {
+      return this.enqueue(() => store.createPlan({
+        workspaceId: session.workspaceId,
+        sessionId,
+        title,
+        content: candidate.content,
+        status: decision.status,
+        artifactPath: candidate.artifactPath,
+        contentHash,
+        ...(contractJson ? { contractJson } : {}),
+      }));
+    }
+    if (decision.action === "update" && existing) {
+      return this.enqueue(() => store.updatePlan(existing.id, {
+        title,
+        content: candidate.content,
+        status: decision.status,
+        contentHash,
+        ...(contractJson ? { contractJson } : {}),
+      }, this.planMutationOptions({})));
+    }
+    if (decision.action === "supersede" && existing) {
+      // Supersede points at the replacement plan, so mint its id host-side.
+      const replacementId = `plan-${randomUUID()}`;
+      const superseded = await this.enqueue(() => store.supersedePlan(existing.id, this.planMutationOptions({ supersededBy: replacementId })));
+      const replacement = await this.enqueue(() => store.createPlan({
+        id: replacementId,
+        workspaceId: session.workspaceId,
+        sessionId,
+        title,
+        content: candidate.content,
+        status: decision.status,
+        artifactPath: candidate.artifactPath,
+        contentHash,
+        ...(contractJson ? { contractJson } : {}),
+      }));
+      return replacement ?? superseded;
+    }
+    return existing;
+  }
+
+  /**
+   * The approved (or in-implementation) compact contract for a session, for
+   * prompt composition only. Returns undefined unless a validated contract
+   * exists for the current workspace/session.
+   */
+  public async approvedPlanContract(
+    sessionId: string,
+  ): Promise<{ id: string; revision: number; status: "APPROVED" | "IMPLEMENTING"; contract: PlanContract } | undefined> {
+    const plans = await this.listPlans(sessionId);
+    const active = plans.find((plan) => plan.status === "APPROVED" || plan.status === "IMPLEMENTING");
+    if (!active) return undefined;
+    const contract = planContractOf(active);
+    if (!contract) return undefined;
+    return { id: active.id, revision: active.revision, status: active.status as "APPROVED" | "IMPLEMENTING", contract };
+  }
+
   /** Persist header selection changes even when no provider run follows. */
   public async updateSessionSelection(
     sessionId: string,
     patch: { activeMode?: string; modelId?: string },
+    options: { reason?: "user" | "plan-approved" | "workflow" } = {},
   ): Promise<AgentSession | undefined> {
     const store = await this.requireStore();
     const current = this.sessions.get(sessionId) ?? await store.getSession(sessionId, { workspaceId: this.workspaceId() });
@@ -320,7 +490,7 @@ export class SessionPersistenceCoordinator {
         from: current.activeMode,
         to: patch.activeMode,
         timestamp: this.clock(),
-        reason: "user",
+        reason: options.reason ?? "user",
       });
     }
     return this.saveSession({ ...current, ...patch, updatedAt: this.clock() });

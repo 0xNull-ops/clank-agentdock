@@ -18,10 +18,16 @@ describe("session history UI mapping", () => {
       title: "Investigate auth",
       createdAt: 10,
       updatedAt: 20,
-      activeMode: "ask",
+      activeMode: "unknown-mode",
       modelId: "model-a",
       status: "idle",
     });
+  });
+
+  test("retains canonical custom slugs but rejects malformed stored mode ids", () => {
+    const base = { id: "s", workspaceId: "w", title: "t", createdAt: 1, updatedAt: 2, providerId: "p", modelId: "m", status: "idle" as const };
+    expect(sessionHistoryItemFromSession({ ...base, activeMode: "database-specialist" }).activeMode).toBe("database-specialist");
+    expect(sessionHistoryItemFromSession({ ...base, activeMode: "<script>" }).activeMode).toBe("ask");
   });
 
   test("keeps only text from user and assistant replay messages", () => {

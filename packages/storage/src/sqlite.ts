@@ -34,15 +34,26 @@ import type {
   SubagentRunScopeOptions,
   SubagentRunStatus,
   SubagentResultMetadata,
+  CreatePlanInput,
+  PlanListOptions,
+  PlanMutationOptions,
+  PlanPatch,
+  PlanRecord,
+  PlanScopeOptions,
+  PlanStatus,
   TranscriptOptions,
   UsageRecord,
 } from "./types";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 4;
 /** Maximum number of Unicode code points permitted in a session title. */
 export const MAX_SESSION_TITLE_LENGTH = 200;
 /** Maximum size of retained delegated-task result metadata. */
 export const MAX_SUBAGENT_RESULT_BYTES = 128_000;
+/** Maximum number of Unicode code points retained in one durable plan. */
+export const MAX_PLAN_CONTENT_LENGTH = 128_000;
+export const MAX_PLAN_TITLE_LENGTH = 200;
+export const MAX_PLAN_ACTOR_LENGTH = 128;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2_000;
 const MAX_SUBAGENT_IDENTIFIER_LENGTH = 256;
@@ -221,6 +232,77 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
         ON subagent_runs(parent_run_id, queued_at ASC, id ASC);
     `,
   },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE IF NOT EXISTS plans (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('DRAFT', 'READY_FOR_APPROVAL', 'APPROVED', 'IMPLEMENTING', 'COMPLETE', 'SUPERSEDED', 'DISCARDED')),
+        revision INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        approved_at INTEGER,
+        approved_by TEXT,
+        superseded_by TEXT,
+        discarded_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS plans_workspace_updated_idx
+        ON plans(workspace_id, updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS plans_session_updated_idx
+        ON plans(session_id, updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS plans_status_idx
+        ON plans(workspace_id, status, updated_at DESC, id DESC);
+    `,
+  },
+  {
+    // v4 rebuilds `plans` so the lifecycle can express BLOCKED and carry the
+    // trusted artifact path, content hash, and compact contract columns the
+    // host plan-handoff contract requires. A database that already applied
+    // the unreleased v3 shape is migrated forward; new databases run v3 and
+    // v4 back to back.
+    version: 4,
+    sql: `
+      ALTER TABLE plans RENAME TO plans_legacy;
+      CREATE TABLE plans (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('DRAFT', 'READY_FOR_APPROVAL', 'APPROVED', 'IMPLEMENTING', 'BLOCKED', 'COMPLETE', 'SUPERSEDED', 'DISCARDED')),
+        revision INTEGER NOT NULL,
+        artifact_path TEXT,
+        content_hash TEXT,
+        contract_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        approved_at INTEGER,
+        approved_by TEXT,
+        superseded_by TEXT,
+        discarded_at INTEGER
+      );
+      INSERT INTO plans
+        (id, workspace_id, session_id, title, content, status, revision, created_at, updated_at,
+         approved_at, approved_by, superseded_by, discarded_at)
+      SELECT
+        id, workspace_id, session_id, title, content, status, revision, created_at, updated_at,
+        approved_at, approved_by, superseded_by, discarded_at
+      FROM plans_legacy;
+      DROP TABLE plans_legacy;
+      CREATE INDEX IF NOT EXISTS plans_workspace_updated_idx
+        ON plans(workspace_id, updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS plans_session_updated_idx
+        ON plans(session_id, updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS plans_status_idx
+        ON plans(workspace_id, status, updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS plans_artifact_idx
+        ON plans(session_id, artifact_path, updated_at DESC);
+    `,
+  },
 ];
 
 function json(value: unknown): string | null {
@@ -333,6 +415,219 @@ export class SessionStore {
 
   public async createSession(session: AgentSession): Promise<AgentSession> {
     return this.saveSession(session);
+  }
+
+  public async createPlan(input: CreatePlanInput): Promise<PlanRecord> {
+    const now = this.clock();
+    const plan = normalizePlan({
+      ...input,
+      id: input.id ?? defaultId("plan"),
+      title: input.title ?? "Untitled plan",
+      status: input.status ?? "DRAFT",
+      revision: 1,
+      createdAt: input.createdAt ?? now,
+      updatedAt: input.updatedAt ?? input.createdAt ?? now,
+    });
+    return this.mutate(() => {
+      const session = this.getSessionSync(plan.sessionId);
+      if (!session) throw new Error(`Session not found: ${plan.sessionId}`);
+      if (session.workspaceId !== plan.workspaceId) throw new Error("Plan workspace does not match its session.");
+      this.db.run(
+        `INSERT INTO plans
+          (id, workspace_id, session_id, title, content, status, revision, artifact_path, content_hash, contract_json,
+           created_at, updated_at, approved_at, approved_by, superseded_by, discarded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [plan.id, plan.workspaceId, plan.sessionId, plan.title, plan.content, plan.status, plan.revision,
+          plan.artifactPath ?? null, plan.contentHash ?? null, plan.contractJson ?? null,
+          plan.createdAt, plan.updatedAt, plan.approvedAt ?? null, plan.approvedBy ?? null,
+          plan.supersededBy ?? null, plan.discardedAt ?? null],
+      );
+      return plan;
+    });
+  }
+
+  public async getPlan(id: string, options: PlanScopeOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.enqueue(() => this.planByIdSync(id, options));
+  }
+
+  public async listPlans(options: PlanListOptions): Promise<PlanRecord[]> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.enqueue(() => {
+      const clauses = ["workspace_id = ?"];
+      const params: unknown[] = [options.workspaceId];
+      if (options.sessionId !== undefined) { clauses.push("session_id = ?"); params.push(options.sessionId); }
+      const statuses = options.status === undefined ? [] : Array.isArray(options.status) ? [...options.status] : [options.status];
+      if (statuses.length) { clauses.push(`status IN (${statuses.map(() => "?").join(", ")})`); params.push(...statuses); }
+      return this.rows<PlanRecord>(
+        `SELECT id, workspace_id, session_id, title, content, status, revision, artifact_path, content_hash, contract_json,
+                created_at, updated_at, approved_at, approved_by, superseded_by, discarded_at
+           FROM plans WHERE ${clauses.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ?`,
+        [...params, limitOf(options.limit)],
+        (row) => this.planFromRow(row),
+      );
+    });
+  }
+
+  public async updatePlan(id: string, patch: PlanPatch, options: PlanMutationOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => this.updatePlanSync(id, patch, options));
+  }
+
+  public async approvePlan(id: string, options: PlanMutationOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      const existing = this.planByIdSync(id, options);
+      if (!existing) return undefined;
+      requirePlanState(existing, "READY_FOR_APPROVAL");
+      return this.updatePlanSync(id, {
+        status: "APPROVED",
+        approvedAt: this.clock(),
+        approvedBy: boundedPlanActor(options.actor ?? "user"),
+      }, options);
+    });
+  }
+
+  /** Send a READY_FOR_APPROVAL (or DRAFT) plan back to drafting for changes. */
+  public async revisePlan(id: string, options: PlanMutationOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      const existing = this.planByIdSync(id, options);
+      if (!existing) return undefined;
+      if (existing.status !== "READY_FOR_APPROVAL" && existing.status !== "DRAFT") {
+        throw new Error(`Plan '${id}' cannot be revised from ${existing.status}.`);
+      }
+      return this.updatePlanSync(id, { status: "DRAFT" }, options);
+    });
+  }
+
+  /** Transition an APPROVED plan into implementation when an Implement turn begins. */
+  public async beginPlanImplementation(id: string, options: PlanMutationOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      const existing = this.planByIdSync(id, options);
+      if (!existing) return undefined;
+      if (existing.status === "IMPLEMENTING") return existing;
+      requirePlanState(existing, "APPROVED");
+      return this.updatePlanSync(id, { status: "IMPLEMENTING" }, options);
+    });
+  }
+
+  /** Mark an IMPLEMENTING plan COMPLETE only after a successful implement run. */
+  public async completePlan(id: string, options: PlanMutationOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      const existing = this.planByIdSync(id, options);
+      if (!existing) return undefined;
+      if (existing.status === "COMPLETE") return existing;
+      requirePlanState(existing, "IMPLEMENTING");
+      return this.updatePlanSync(id, { status: "COMPLETE" }, options);
+    });
+  }
+
+  /** Park an IMPLEMENTING plan that hit a material deviation. */
+  public async blockPlan(id: string, options: PlanMutationOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      const existing = this.planByIdSync(id, options);
+      if (!existing) return undefined;
+      requirePlanState(existing, "IMPLEMENTING");
+      return this.updatePlanSync(id, { status: "BLOCKED" }, options);
+    });
+  }
+
+  public async supersedePlan(id: string, options: PlanMutationOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      const existing = this.planByIdSync(id, options);
+      if (!existing) return undefined;
+      if (!["DRAFT", "READY_FOR_APPROVAL", "APPROVED", "IMPLEMENTING", "BLOCKED"].includes(existing.status)) throw new Error(`Plan '${id}' cannot be superseded from ${existing.status}.`);
+      return this.updatePlanSync(id, { status: "SUPERSEDED", supersededBy: options.supersededBy }, options);
+    });
+  }
+
+  public async discardPlan(id: string, options: PlanMutationOptions): Promise<PlanRecord | undefined> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      const existing = this.planByIdSync(id, options);
+      if (!existing) return undefined;
+      if (["COMPLETE", "SUPERSEDED", "DISCARDED"].includes(existing.status)) throw new Error(`Plan '${id}' cannot be discarded from ${existing.status}.`);
+      return this.updatePlanSync(id, { status: "DISCARDED", discardedAt: this.clock() }, options);
+    });
+  }
+
+  public async deletePlan(id: string, options: PlanScopeOptions): Promise<boolean> {
+    requirePlanWorkspace(options.workspaceId);
+    return this.mutate(() => {
+      if (!this.planByIdSync(id, options)) return false;
+      this.db.run("DELETE FROM plans WHERE id=?", [id]);
+      return true;
+    });
+  }
+
+  public savePlan(input: CreatePlanInput): Promise<PlanRecord> { return this.createPlan(input); }
+  public markPlanApproved(id: string, options: PlanMutationOptions): Promise<PlanRecord | undefined> { return this.approvePlan(id, options); }
+
+  private planByIdSync(id: string, options: PlanScopeOptions): PlanRecord | undefined {
+    const clauses = ["id = ?"];
+    const params: unknown[] = [id];
+    if (options.workspaceId !== undefined) { clauses.push("workspace_id = ?"); params.push(options.workspaceId); }
+    if (options.sessionId !== undefined) { clauses.push("session_id = ?"); params.push(options.sessionId); }
+    return this.rows<PlanRecord>(
+      `SELECT id, workspace_id, session_id, title, content, status, revision, artifact_path, content_hash, contract_json,
+              created_at, updated_at, approved_at, approved_by, superseded_by, discarded_at
+         FROM plans WHERE ${clauses.join(" AND ")} LIMIT 1`,
+      params,
+      (row) => this.planFromRow(row),
+    )[0];
+  }
+
+  private planFromRow(row: Record<string, unknown>): PlanRecord {
+    return {
+      id: String(value(row, "id")),
+      workspaceId: String(value(row, "workspace_id")),
+      sessionId: String(value(row, "session_id")),
+      title: String(value(row, "title")),
+      content: String(value(row, "content")),
+      status: value(row, "status") as PlanStatus,
+      revision: integer(value(row, "revision")),
+      ...(nullableString(row["artifact_path"]) !== undefined ? { artifactPath: nullableString(row["artifact_path"]) } : {}),
+      ...(nullableString(row["content_hash"]) !== undefined ? { contentHash: nullableString(row["content_hash"]) } : {}),
+      ...(nullableString(row["contract_json"]) !== undefined ? { contractJson: nullableString(row["contract_json"]) } : {}),
+      createdAt: integer(value(row, "created_at")),
+      updatedAt: integer(value(row, "updated_at")),
+      ...(nullableInteger(row["approved_at"]) !== undefined ? { approvedAt: nullableInteger(row["approved_at"]) } : {}),
+      ...(nullableString(row["approved_by"]) !== undefined ? { approvedBy: nullableString(row["approved_by"]) } : {}),
+      ...(nullableString(row["superseded_by"]) !== undefined ? { supersededBy: nullableString(row["superseded_by"]) } : {}),
+      ...(nullableInteger(row["discarded_at"]) !== undefined ? { discardedAt: nullableInteger(row["discarded_at"]) } : {}),
+    };
+  }
+
+  /**
+   * Apply a bounded patch with an optimistic revision check. Every successful
+   * mutation increments the revision, so stale UI actions fail closed.
+   */
+  private updatePlanSync(id: string, patch: PlanPatch, options: PlanMutationOptions): PlanRecord | undefined {
+    const existing = this.planByIdSync(id, options);
+    if (!existing) return undefined;
+    if (options.expectedRevision !== undefined && options.expectedRevision !== existing.revision) {
+      throw new Error(`Plan '${id}' changed since revision ${options.expectedRevision} (current revision ${existing.revision}). Reload the plan and try again.`);
+    }
+    const next = normalizePlan({
+      ...existing,
+      ...boundedPlanPatch(patch),
+      revision: existing.revision + 1,
+      updatedAt: this.clock(),
+    });
+    this.db.run(
+      `UPDATE plans SET title=?, content=?, status=?, artifact_path=?, content_hash=?, contract_json=?,
+              revision=?, updated_at=?, approved_at=?, approved_by=?, superseded_by=?, discarded_at=?
+         WHERE id=?`,
+      [next.title, next.content, next.status, next.artifactPath ?? null, next.contentHash ?? null, next.contractJson ?? null,
+        next.revision, next.updatedAt, next.approvedAt ?? null, next.approvedBy ?? null,
+        next.supersededBy ?? null, next.discardedAt ?? null, id],
+    );
+    return next;
   }
 
   public async saveSession(session: AgentSession): Promise<AgentSession> {
@@ -722,9 +1017,12 @@ export class SessionStore {
         ...stored,
         message: options.includeProviderFrames === true ? stored.message : stripProviderFrames(stored.message),
       }));
-      const { providerMessages: _providerMessages, ...withoutProviderMessages } = snapshot;
+      // Safe export never carries plan rows: plan Markdown, absolute artifact
+      // paths, and the compact contract are host-owned. An explicit host-only
+      // export opts into provider rows separately; plans stay out of both.
+      const { providerMessages: _providerMessages, plans: _plans, ...withoutSensitive } = snapshot;
       return {
-        ...withoutProviderMessages,
+        ...withoutSensitive,
         messages,
         ...(includeProvider ? { providerMessages: snapshot.providerMessages } : {}),
         exportedAt: this.clock(),
@@ -951,7 +1249,14 @@ export class SessionStore {
       [sessionId, limit],
       (row) => ({ id: String(value(row, "id")), sessionId: String(value(row, "session_id")), stepId: nullableString(value(row, "step_id")), providerId: nullableString(value(row, "provider_id")), modelId: nullableString(value(row, "model_id")), inputTokens: nullableInteger(value(row, "input_tokens")), outputTokens: nullableInteger(value(row, "output_tokens")), totalTokens: nullableInteger(value(row, "total_tokens")), createdAt: integer(value(row, "created_at")) }),
     );
-    return { session, messages, providerMessages, steps, toolCalls, toolResults, approvals, modeTransitions, usage };
+    const plans = this.rows<PlanRecord>(
+      `SELECT id, workspace_id, session_id, title, content, status, revision, artifact_path, content_hash, contract_json,
+              created_at, updated_at, approved_at, approved_by, superseded_by, discarded_at
+         FROM plans WHERE session_id=? ORDER BY updated_at DESC, id DESC LIMIT ?`,
+      [sessionId, limit],
+      (row) => this.planFromRow(row),
+    );
+    return { session, messages, providerMessages, steps, toolCalls, toolResults, approvals, modeTransitions, usage, plans };
   }
 
   private collectionWasTruncated(sessionId: string, limit: number): boolean {
@@ -1216,6 +1521,71 @@ function requireSubagentWorkspace(workspaceId: string | undefined): asserts work
   if (typeof workspaceId !== "string" || !workspaceId.trim()) {
     throw new Error("Subagent run operations require an explicit workspaceId scope.");
   }
+}
+
+const PLAN_STATUSES: readonly PlanStatus[] = [
+  "DRAFT", "READY_FOR_APPROVAL", "APPROVED", "IMPLEMENTING", "BLOCKED", "COMPLETE", "SUPERSEDED", "DISCARDED",
+];
+
+function requirePlanWorkspace(workspaceId: string | undefined): asserts workspaceId is string {
+  if (typeof workspaceId !== "string" || !workspaceId.trim()) {
+    throw new Error("Plan operations require an explicit workspaceId scope.");
+  }
+}
+
+function requirePlanState(plan: PlanRecord, status: PlanStatus): void {
+  if (plan.status !== status) {
+    throw new Error(`Plan '${plan.id}' is ${plan.status}; this action requires ${status}.`);
+  }
+}
+
+function boundedPlanActor(actor: string): string {
+  return [...actor.trim()].slice(0, MAX_PLAN_ACTOR_LENGTH).join("");
+}
+
+/** Keep only defined patch fields so a partial patch cannot clear durable data. */
+function boundedPlanPatch(patch: PlanPatch): PlanPatch {
+  const bounded: PlanPatch = {};
+  if (patch.title !== undefined) bounded.title = patch.title;
+  if (patch.content !== undefined) bounded.content = patch.content;
+  if (patch.status !== undefined) bounded.status = patch.status;
+  if (patch.artifactPath !== undefined) bounded.artifactPath = patch.artifactPath;
+  if (patch.contentHash !== undefined) bounded.contentHash = patch.contentHash;
+  if (patch.contractJson !== undefined) bounded.contractJson = patch.contractJson;
+  if (patch.approvedAt !== undefined) bounded.approvedAt = patch.approvedAt;
+  if (patch.approvedBy !== undefined) bounded.approvedBy = patch.approvedBy;
+  if (patch.supersededBy !== undefined) bounded.supersededBy = patch.supersededBy;
+  if (patch.discardedAt !== undefined) bounded.discardedAt = patch.discardedAt;
+  return bounded;
+}
+
+function normalizePlan(plan: PlanRecord): PlanRecord {
+  const id = requiredBoundedString(plan.id, "Plan id", MAX_SUBAGENT_IDENTIFIER_LENGTH);
+  const workspaceId = requiredBoundedString(plan.workspaceId, "Plan workspaceId", MAX_SUBAGENT_IDENTIFIER_LENGTH);
+  const sessionId = requiredBoundedString(plan.sessionId, "Plan sessionId", MAX_SUBAGENT_IDENTIFIER_LENGTH);
+  const title = requiredBoundedString(plan.title, "Plan title", MAX_PLAN_TITLE_LENGTH);
+  const content = requiredBoundedString(plan.content, "Plan content", MAX_PLAN_CONTENT_LENGTH);
+  if (!PLAN_STATUSES.includes(plan.status)) throw new Error(`Invalid plan status: ${String(plan.status)}`);
+  if (!Number.isSafeInteger(plan.revision) || plan.revision < 1) throw new Error("Plan revision must be a positive integer.");
+  const normalized: PlanRecord = {
+    id,
+    workspaceId,
+    sessionId,
+    title,
+    content,
+    status: plan.status,
+    revision: plan.revision,
+    createdAt: requiredTimestamp(plan.createdAt, "Plan createdAt"),
+    updatedAt: requiredTimestamp(plan.updatedAt, "Plan updatedAt"),
+    ...(optionalBoundedString(plan.artifactPath, "artifactPath", 512) ? { artifactPath: optionalBoundedString(plan.artifactPath, "artifactPath", 512) } : {}),
+    ...(optionalBoundedString(plan.contentHash, "contentHash", 256) ? { contentHash: optionalBoundedString(plan.contentHash, "contentHash", 256) } : {}),
+    ...(optionalBoundedString(plan.contractJson, "contractJson", MAX_PLAN_CONTENT_LENGTH) ? { contractJson: optionalBoundedString(plan.contractJson, "contractJson", MAX_PLAN_CONTENT_LENGTH) } : {}),
+    ...(plan.approvedAt === undefined ? {} : { approvedAt: requiredTimestamp(plan.approvedAt, "Plan approvedAt") }),
+    ...(plan.approvedBy === undefined ? {} : { approvedBy: boundedPlanActor(plan.approvedBy) }),
+    ...(plan.supersededBy === undefined ? {} : { supersededBy: optionalBoundedString(plan.supersededBy, "supersededBy", MAX_SUBAGENT_IDENTIFIER_LENGTH) }),
+    ...(plan.discardedAt === undefined ? {} : { discardedAt: requiredTimestamp(plan.discardedAt, "Plan discardedAt") }),
+  };
+  return normalized;
 }
 
 function escapeSql(input: string): string {

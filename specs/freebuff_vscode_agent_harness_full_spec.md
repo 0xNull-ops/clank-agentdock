@@ -1173,6 +1173,24 @@ skillsMode: merge | replace
 toolsMode: merge | replace
 ```
 
+## 10.4 Runtime identity and reload semantics
+
+Sessions persist the canonical mode slug, not a copy of executable policy. The
+extension host resolves that slug through the current registry before every
+turn so edits to a project mode take effect without duplicating stale policy in
+SQLite. The UI must show the resolved source scope (`built-in`, `global`, or
+`project`) and refresh its mode picker after a watched definition changes.
+
+If a persisted mode is deleted, invalid, shadowed, or unavailable, the host must
+surface a blocking diagnostic and require an explicit installed-mode selection
+before another provider turn. It must never silently execute Ask or another
+fallback under the missing mode's session label.
+
+Mode Markdown is configuration code: project definitions are loaded only from
+trusted workspace roots, third-party compatibility locations are read-only, and
+all path, command, MCP, delegation, model, and tool rules are revalidated by the
+host after reload.
+
 Default: `merge`.
 
 ---

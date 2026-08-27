@@ -24,4 +24,21 @@ await build({
 });
 
 await copyFile(extensionRequire.resolve("sql.js/dist/sql-wasm.wasm"), resolve(outputDirectory, "sql-wasm.wasm"));
-console.log("Bundled self-contained VS Code extension host and sql.js WASM.");
+
+// The webview must be a single classic script: the HTML shell loads it with a
+// plain <script src> tag and a strict nonce CSP, so ES module syntax (what tsc
+// emits for the webview target) would throw "Cannot use import statement outside
+// a module" and leave the panel blank. Bundle it so ../shared/protocol is
+// inlined and the output contains no top-level import/export.
+await build({
+  entryPoints: [resolve(extensionRoot, "src/webview/main.ts")],
+  outfile: resolve(outputDirectory, "webview/main.js"),
+  bundle: true,
+  platform: "browser",
+  format: "iife",
+  target: "es2022",
+  sourcemap: true,
+  logLevel: "warning",
+});
+
+console.log("Bundled self-contained VS Code extension host, sql.js WASM, and webview.");

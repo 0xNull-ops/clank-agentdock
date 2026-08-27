@@ -15,6 +15,17 @@ try {
   const wasm = await stat(resolve(extensionRoot, "dist/sql-wasm.wasm"));
   if (wasm.size < 100_000) throw new Error("VSIX sql.js WASM is missing or truncated.");
 
+  // The webview HTML shell loads dist/webview/main.js as a classic script under
+  // a strict nonce CSP. Reject the package if the shipped bundle retained ES
+  // module syntax (the blank-panel defect) or Node-only requires.
+  const webview = await readFile(resolve(extensionRoot, "dist/webview/main.js"), "utf8");
+  if (/^\s*(import|export)\s/m.test(webview)) throw new Error("VSIX webview bundle is not a classic script; the panel would stay blank.");
+  if (/require\(/m.test(webview)) throw new Error("VSIX webview bundle must not reference Node require.");
+  await Promise.all([
+    stat(resolve(extensionRoot, "dist/webview/styles.css")),
+    stat(resolve(extensionRoot, "dist/webview/generated-tokens.css")),
+  ]);
+
   const stubRoot = resolve(root, "host-stub/node_modules/vscode");
   await mkdir(stubRoot, { recursive: true });
   await writeFile(resolve(stubRoot, "index.js"), "module.exports = {};\n", "utf8");

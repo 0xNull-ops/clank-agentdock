@@ -91,6 +91,5 @@ function textFromContent(content: NormalizedContent): string {
 }
 
 function normalizeMode(value: string): AgentMode {
-  const modes: AgentMode[] = ["ask", "plan", "architect", "implement", "debug", "review", "orchestrate", "custom"];
-  return modes.includes(value as AgentMode) ? value as AgentMode : "ask";
+  return /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(value) ? value : "ask";
 }
