@@ -53,6 +53,12 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .session-menu-heading { display: flex; align-items: center; justify-content: space-between; padding: 5px 7px 6px; color: var(--forge-muted); font: 600 9px var(--forge-code); letter-spacing: .1em; }
 .session-menu-heading button { padding: 2px 5px; border: 0; border-radius: 4px; color: var(--forge-muted); background: transparent; cursor: pointer; font-size: 14px; }
 .session-menu-heading button:hover { color: var(--forge-text); background: var(--forge-hover); }
+.new-session-header-btn { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 9px; border: 1px solid rgba(56,189,248,.3); border-radius: 6px; color: #38bdf8; background: rgba(56,189,248,.08); cursor: pointer; font-size: 11.5px; font-weight: 500; transition: all .18s ease; }
+.new-session-header-btn:hover { border-color: rgba(56,189,248,.6); background: rgba(56,189,248,.18); color: #ffffff; }
+.new-session-plus { font-size: 13px; font-weight: 700; line-height: 1; }
+.session-new-menu-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: calc(100% - 8px); margin: 0 4px 7px; padding: 8px 10px; border: 1px solid rgba(56,189,248,.35); border-radius: var(--forge-radius-sm); color: #38bdf8; background: rgba(56,189,248,.1); cursor: pointer; font-size: 11.5px; font-weight: 600; transition: all .18s ease; }
+.session-new-menu-btn:hover { border-color: rgba(56,189,248,.7); background: rgba(56,189,248,.22); color: #ffffff; }
+.session-new-menu-btn .new-icon { font-size: 13px; font-weight: 700; }
 .session-search { box-sizing: border-box; width: calc(100% - 8px); margin: 0 4px 5px; padding: 7px 8px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); outline: none; color: var(--forge-text); background: var(--forge-surface); font: 10px var(--forge-code); }
 .session-search:focus { border-color: var(--forge-cyan); }
 .session-item { display: flex; align-items: center; width: 100%; min-height: 44px; border-radius: var(--forge-radius-sm); color: var(--forge-text-secondary); background: transparent; }
