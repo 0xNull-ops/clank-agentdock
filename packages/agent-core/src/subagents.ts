@@ -2,7 +2,7 @@ import { BUILT_IN_MODES } from "./modes";
 import { DelegationEffects, ModeDefinition, ModelPolicy } from "./types";
 
 /** The provider-neutral agents available to an orchestrator. */
-export type SubagentType =
+export type BuiltInSubagentType =
   | "explore"
   | "general"
   | "test"
@@ -10,8 +10,11 @@ export type SubagentType =
   | "research"
   | "implementer";
 
+/** Canonical built-in or host-injected subagent slug. */
+export type SubagentType = string;
+
 /** Backwards-compatible name for callers that call an implementer `implement`. */
-export type AgentType = SubagentType | "implement";
+export type AgentType = string;
 
 export type SubagentAuthority = DelegationEffects;
 
@@ -26,10 +29,11 @@ export interface SubagentDefinition {
   /** Alias useful to adapters that call this field `authority`. */
   readonly authority: DelegationEffects;
   readonly delegationAllowed: boolean;
-  readonly allowedAgents: readonly SubagentType[];
+  readonly allowedAgents: readonly string[];
   readonly type: "subagent";
   readonly model?: string;
   readonly modelPolicy?: ModelPolicy;
+  readonly routeOverrides?: boolean;
 }
 
 export type AgentDefinition = SubagentDefinition;
@@ -279,6 +283,8 @@ export interface SubagentRuntimeOptions {
   readonly approveWriteSpawn?: WriteSpawnApprovalHook;
   readonly writeSpawnApproval?: WriteSpawnApprovalHook;
   readonly onEvent?: (event: SubagentEvent) => void;
+  /** Immutable host-resolved custom definitions available for this turn. */
+  readonly definitions?: readonly SubagentDefinition[];
 }
 
 export type SubagentSchedulerOptions = SubagentRuntimeOptions;
@@ -309,7 +315,7 @@ const AUTHORITY_RANK: Record<DelegationEffects, number> = {
   write: 2,
 };
 
-const VALID_AGENTS = new Set<SubagentType>(BUILT_IN_SUBAGENTS.map((item) => item.agent));
+const CANONICAL_AGENT = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
 function isDelegationEffect(value: unknown): value is DelegationEffects {
   return value === "read-only" || value === "same-as-parent" || value === "write";
@@ -495,6 +501,7 @@ export class SubagentOrchestrator {
   private readonly maxDepth: number;
   private readonly approveWriteSpawn?: WriteSpawnApprovalHook;
   private readonly eventHandler?: (event: SubagentEvent) => void;
+  private readonly definitions = new Map<string, SubagentDefinition>();
   private readonly queue: TaskState[] = [];
   private readonly states = new Map<string, TaskState>();
   private readonly pendingIds = new Set<string>();
@@ -507,6 +514,12 @@ export class SubagentOrchestrator {
       throw new Error("A subagent executor with execute or run is required");
     }
     this.executor = options.executor;
+    for (const definition of BUILT_IN_SUBAGENTS) this.definitions.set(definition.slug, definition);
+    for (const definition of options.definitions ?? []) {
+      const slug = normalizeAgentType(definition.slug || definition.agent);
+      if (!CANONICAL_AGENT.test(slug) || this.definitions.has(slug)) continue;
+      this.definitions.set(slug, { ...definition, agent: slug, slug });
+    }
     this.eventHandler = options.onEvent;
     this.approveWriteSpawn = options.approveWriteSpawn ?? options.writeSpawnApproval;
     const configuredConcurrent = options.maxConcurrent ?? options.maxConcurrentSubagents ?? 3;
@@ -552,10 +565,11 @@ export class SubagentOrchestrator {
   validate(request: SubagentTaskRequest, parent?: SubagentParentContext): SubagentError | undefined {
     if (typeof request.prompt !== "string" || !request.prompt.trim()) return { code: "INVALID_TASK_PROMPT", message: "A subagent prompt is required." };
     const normalizedAgent = normalizeAgentType(request.agent);
-    if (!VALID_AGENTS.has(normalizedAgent)) return { code: "UNKNOWN_AGENT", message: `Unknown subagent: ${String(request.agent)}` };
+    if (!CANONICAL_AGENT.test(normalizedAgent)) return { code: "UNKNOWN_AGENT", message: `Unknown subagent: ${String(request.agent)}` };
     if (request.id && (this.states.has(request.id) || this.pendingIds.has(request.id))) return { code: "DUPLICATE_TASK_ID", message: `A subagent task already uses id ${request.id}.` };
-    const definition = getSubagentDefinition(normalizedAgent);
+    const definition = this.definitions.get(normalizedAgent);
     if (!definition) return { code: "UNKNOWN_AGENT", message: `Unknown subagent: ${String(request.agent)}` };
+    if (request.model && !definition.routeOverrides) return { code: "ROUTE_OVERRIDE_FORBIDDEN", message: `${definition.name} does not allow task-level model overrides.` };
     const resolvedParent = this.resolveParent(request, parent);
     if (resolvedParent.authority !== undefined && !isDelegationEffect(resolvedParent.authority)) {
       return { code: "INVALID_PARENT_AUTHORITY", message: "Parent authority is invalid." };
@@ -568,7 +582,7 @@ export class SubagentOrchestrator {
       return { code: "DELEGATION_NOT_ALLOWED", message: `Mode ${parentMode.name} cannot spawn subagents.` };
     }
     if (resolvedParent.agent) {
-      const parentDefinition = getSubagentDefinition(resolvedParent.agent);
+      const parentDefinition = this.definitions.get(normalizeAgentType(resolvedParent.agent));
       if (parentDefinition && !parentDefinition.delegationAllowed) {
         return { code: "DELEGATION_NOT_ALLOWED", message: `Agent ${parentDefinition.name} cannot spawn subagents.` };
       }
@@ -577,8 +591,8 @@ export class SubagentOrchestrator {
     // intentionally broader than older mode files that predate all six
     // subagent definitions, so it can route review/general work too.
     const allowed = parentMode?.slug === "orchestrate"
-      ? BUILT_IN_SUBAGENTS.map((item) => item.agent)
-      : parentMode?.allowedAgents ?? (resolvedParent.agent ? getSubagentDefinition(resolvedParent.agent)?.allowedAgents : undefined);
+      ? [...this.definitions.keys()]
+      : parentMode?.allowedAgents ?? (resolvedParent.agent ? this.definitions.get(normalizeAgentType(resolvedParent.agent))?.allowedAgents : undefined);
     if (allowed && allowed.length > 0 && !allowed.some((item) => normalizeAgentType(item) === normalizedAgent)) {
       return { code: "AGENT_NOT_ALLOWED", message: `Parent cannot spawn ${normalizedAgent}.`, details: { allowedAgents: clone(allowed) as unknown as Record<string, unknown> } };
     }
@@ -608,7 +622,7 @@ export class SubagentOrchestrator {
   async spawn(request: SubagentTaskRequest, parent?: SubagentParentContext): Promise<SubagentResult> {
     const resolvedParent = this.resolveParent(request, parent);
     const normalizedAgent = normalizeAgentType(request.agent);
-    const definition = getSubagentDefinition(normalizedAgent);
+    const definition = this.definitions.get(normalizedAgent);
     const validation = this.validate(request, resolvedParent);
     const task = this.createTask(request, resolvedParent, definition);
     if (validation) {

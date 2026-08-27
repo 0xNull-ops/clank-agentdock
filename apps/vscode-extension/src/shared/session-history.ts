@@ -67,6 +67,8 @@ export function subagentActivityFromRecord(record: SubagentRunRecord): SubagentA
     task: record.taskSummary,
     state,
     depth: record.depth,
+    ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
+    ...(record.providerId ? { providerId: record.providerId } : {}),
     ...(record.modelId ? { modelId: record.modelId } : {}),
     ...(result?.summary || result?.error?.message ? { summary: result.summary || result.error?.message } : {}),
     ...(result?.filesInspected?.length ? { filesInspected: [...result.filesInspected] } : {}),
@@ -78,8 +80,7 @@ export function subagentActivityFromRecord(record: SubagentRunRecord): SubagentA
 function normalizeSubagentAgent(value: string): SubagentActivity["agent"] {
   const normalized = value.trim().toLowerCase();
   if (normalized === "implement") return "implementer";
-  const agents: SubagentActivity["agent"][] = ["explore", "general", "test", "review", "research", "implementer"];
-  return agents.includes(normalized as SubagentActivity["agent"]) ? normalized as SubagentActivity["agent"] : "general";
+  return /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(normalized) ? normalized : "general";
 }
 
 function textFromContent(content: NormalizedContent): string {

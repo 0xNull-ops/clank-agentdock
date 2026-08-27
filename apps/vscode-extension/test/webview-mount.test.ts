@@ -174,4 +174,30 @@ describe("webview mount (blank-panel regression)", () => {
     expect(harness.app.innerHTML).toContain("skill-chip");
     expect(harness.app.innerHTML).toContain("Review");
   });
+
+  test("renders nested subagents with safe route details", () => {
+    const harness = createHarness();
+    harness.run();
+    const common = {
+      type: "initialize",
+      sessionId: "session-tree",
+      mode: "orchestrate",
+      modeOptions: [{ id: "orchestrate", label: "Orchestrate", description: "Delegate" }],
+      modelId: "parent-model",
+      modelPolicy: { policy: "user-selectable" },
+      models: [{ id: "parent-model", label: "Parent", hint: "test" }],
+      skills: [], selectedSkillIds: [], mandatorySkillIds: [], messages: [], tools: [], plan: undefined,
+      workspaceName: "test",
+    } as const;
+    harness.dispatch("message", {
+      ...common,
+      subagents: [
+        { id: "root-child", agent: "research-specialist", task: "Research", state: "running", depth: 1, providerId: "vibeproxy", modelId: "research-model" },
+        { id: "nested-child", parentRunId: "root-child", agent: "review", task: "Review", state: "queued", depth: 2, providerId: "freebuff2api", modelId: "review-model" },
+      ],
+    });
+    expect(harness.app.innerHTML).toContain("subagent-children");
+    expect(harness.app.innerHTML).toContain("vibeproxy / research-model");
+    expect(harness.app.innerHTML).toContain("freebuff2api / review-model");
+  });
 });

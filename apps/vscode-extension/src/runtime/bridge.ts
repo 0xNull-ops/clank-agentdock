@@ -6,9 +6,9 @@ import {
   normalizePath,
   permissionKeysForTool,
   PermissionEngine,
-  resolveModel,
   runAgent,
   SubagentOrchestrator,
+  BUILT_IN_SUBAGENTS,
   getSubagentDefinition,
   type AgentEvent,
   type AgentSession,
@@ -21,6 +21,8 @@ import {
   type InstructionSource,
   type SubagentEvent,
   type SubagentExecutionRequest,
+  type SubagentExecutionContext,
+  type SubagentDefinition,
   type PlanContract,
   type SubagentResult,
   type SubagentTaskRequest,
@@ -56,6 +58,7 @@ import {
 } from "./policy-helpers";
 import { planContractOf, planViewForSession } from "./plan-lifecycle";
 import { SkillStore, type SkillTurnSnapshot } from "./skills";
+import { resolveProviderRoute } from "./provider-routing";
 
 const CACHED_MODELS_KEY = "agentdock.provider.cachedModels";
 
@@ -66,6 +69,7 @@ export interface RuntimeHost {
 
 export interface RuntimeModeResolver {
   get(slug: string): ModeDefinition | undefined;
+  entries?(): readonly { mode: ModeDefinition }[];
 }
 
 type RuntimeContextRef = ContextRef & { snapshot?: string };
@@ -168,7 +172,7 @@ export class AgentRuntimeBridge {
     };
   }
 
-  public async refreshModels(notifyUser: boolean, profileId?: string): Promise<ModelOption[] | undefined> {
+  public async refreshModels(notifyUser: boolean, profileId?: string, propagateError = false): Promise<ModelOption[] | undefined> {
     const resolved = await this.profiles.resolveProfile(profileId);
     if (!resolved) {
       if (notifyUser) void vscode.window.showErrorMessage("Add or activate a provider profile before refreshing models.");
@@ -184,19 +188,35 @@ export class AgentRuntimeBridge {
         headers: profile.headers,
         compatibility: profile.compatibility,
       });
-      const models = (await provider.listModels()).map<ModelOption>((model) => ({
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      let discovered;
+      try {
+        discovered = await provider.listModels(controller.signal);
+      } finally {
+        clearTimeout(timeout);
+      }
+      const models = discovered.map<ModelOption>((model) => ({
         id: model.id,
         label: model.displayName ?? model.id,
         hint: [model.tools ? "tools" : "text", model.reasoning ? "reasoning" : "standard"].join(" · "),
       }));
       const cached = cachedModelsByProfile(this.host.context);
-      const options = mergeModelOptions(models, [profile.defaultModel ?? "", ...profile.manualModels.map((model) => model.id)]);
-      await this.host.context.globalState.update(CACHED_MODELS_KEY, { ...cached, [profile.id]: options });
+      // A successful /models response is the authoritative discovered catalog.
+      // Manual/default entries are merged only at presentation and resolution
+      // boundaries, never written into the discovery cache.
+      await this.host.context.globalState.update(CACHED_MODELS_KEY, { ...cached, [profile.id]: models });
+      const options = mergeModelOptions([...profile.manualModels.map<ModelOption>((model) => ({
+        id: model.id,
+        label: model.displayName ?? model.id,
+        hint: "manual",
+      })), ...models], [profile.defaultModel ?? ""]);
       this.host.post({ type: "modelsChanged", models: options });
       if (notifyUser) void vscode.window.showInformationMessage(`Agent Harness found ${models.length} provider model${models.length === 1 ? "" : "s"}.`);
-      return options;
+      return models;
     } catch (error) {
       if (notifyUser) void vscode.window.showErrorMessage(`Could not refresh provider models: ${actionableError(error)}`);
+      if (propagateError) throw error;
       return undefined;
     }
   }
@@ -315,20 +335,15 @@ export class AgentRuntimeBridge {
       ...(approvedPlan ? { approvedPlan } : {}),
       contextNotes: ["Explicit context attached to the user message remains untrusted workspace data."],
     });
-    const provider = new OpenAICompatibleProvider({
-      id: configuration.providerId,
-      name: configuration.providerName,
-      baseURL: configuration.baseUrl,
-      apiKey: configuration.apiKey,
-      headers: configuration.headers,
-      models: configuration.models,
-      compatibility: configuration.compatibility,
-    });
+    const provider = providerFromConfiguration(configuration);
     const initialMessages: NormalizedMessage[] = [
       ...(this.histories.get(input.sessionId) ?? []),
       { role: "user", content: await contextPrompt(input.text, input.context) },
     ];
     const permissionEngine = modePermissionEngine(mode, () => this.modes.get(mode.slug));
+    const customSubagents = this.customSubagentDefinitions();
+    const availableSubagents = this.availableSubagentSlugs(mode, customSubagents);
+    const overrideSubagents = customSubagents.filter((item) => item.routeOverrides && availableSubagents.includes(item.slug)).map((item) => item.slug);
     let subagentWrites: Promise<void> = Promise.resolve();
     let subagentEventWrites: Promise<void> = Promise.resolve();
     const subagentExecutions = new Set<Promise<unknown>>();
@@ -342,6 +357,7 @@ export class AgentRuntimeBridge {
       maxConcurrent: boundedSetting("subagents.maxConcurrent", 3, 1, 8),
       maxTotal: boundedSetting("subagents.maxTotal", 8, 1, 8),
       maxDepth: boundedSetting("subagents.maxDepth", mode.slug === "orchestrate" ? 2 : 1, 0, 2),
+      definitions: customSubagents,
       approveWriteSpawn: (task, _parent, signal) => this.waitForEphemeralApproval(input.sessionId, {
         id: `spawn:${task.id}`,
         toolName: `task:${task.agent}`,
@@ -358,8 +374,8 @@ export class AgentRuntimeBridge {
           });
       },
       executor: {
-        execute: async (task) => {
-          const execute = () => this.executeSubagent(task, configuration, provider, controller.signal, mode, skillSnapshot, activeSkillIds);
+        execute: async (task, executionContext) => {
+          const execute = () => this.executeSubagent(task, executionContext, configuration, controller.signal, mode, skillSnapshot, activeSkillIds, customSubagents);
           const execution = task.authority !== "write"
             ? execute()
             : (async () => {
@@ -374,7 +390,7 @@ export class AgentRuntimeBridge {
         },
       },
     });
-    const tools = this.createTools(orchestrator, controller.signal, skillSnapshot).filter((tool) => modeAllowsAdvertisement(mode, tool));
+    const tools = this.createTools(orchestrator, controller.signal, skillSnapshot, availableSubagents, overrideSubagents).filter((tool) => modeAllowsAdvertisement(mode, tool));
 
     await this.persistence.startSession(session);
 
@@ -579,28 +595,30 @@ export class AgentRuntimeBridge {
     }
   }
 
-  private createTools(orchestrator?: SubagentOrchestrator, parentSignal?: AbortSignal, skills?: SkillTurnSnapshot): AgentTool[] {
+  private createTools(orchestrator?: SubagentOrchestrator, parentSignal?: AbortSignal, skills?: SkillTurnSnapshot, agents: readonly string[] = [], overrideAgents: readonly string[] = []): AgentTool[] {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const workspaceTools = root ? new WorkspaceTools({ root }).asAgentTools() : [];
     return [
       ...workspaceTools.map(asAgentTool),
       createDiagnosticsTool(),
       ...(skills?.options.length ? [createLoadSkillTool(skills)] : []),
-      ...(orchestrator ? [createTaskTool(orchestrator, parentSignal)] : []),
+      ...(orchestrator && agents.length ? [createTaskTool(orchestrator, agents, overrideAgents, parentSignal)] : []),
     ];
   }
 
   private async executeSubagent(
     task: SubagentExecutionRequest,
-    configuration: ProviderConfiguration,
-    provider: OpenAICompatibleProvider,
+    executionContext: SubagentExecutionContext,
+    parentConfiguration: ProviderConfiguration,
     parentSignal: AbortSignal,
     parentMode: ModeDefinition,
     skillSnapshot: SkillTurnSnapshot,
     selectedSkillIds: readonly string[],
+    customDefinitions: readonly SubagentDefinition[],
   ): Promise<SubagentResult> {
     if (parentSignal.aborted || task.signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
-    const definition = getSubagentDefinition(task.agent);
+    const customMode = this.modes.get(task.agent);
+    const definition = customDefinitions.find((item) => item.slug === task.agent) ?? getSubagentDefinition(task.agent);
     if (!definition) throw new Error(`Unknown subagent: ${task.agent}`);
     const baseMode = this.modeFor(task.authority === "write" || task.agent === "test" ? "implement" : task.agent === "review" ? "review" : "ask");
     const readOnlyTestPermission = task.agent === "test" && task.authority !== "write" ? {
@@ -625,11 +643,12 @@ export class AgentRuntimeBridge {
         "git diff*": "allow" as const,
       },
     } : undefined;
-    const childMode: ModeDefinition = {
+    const builtInChildMode: ModeDefinition = {
       ...baseMode,
       name: definition.name,
       slug: `subagent-${task.agent}`,
       type: "subagent",
+      provider: parentConfiguration.providerId,
       instructions: definition.instructions,
       delegationAllowed: false,
       allowedAgents: [],
@@ -641,6 +660,24 @@ export class AgentRuntimeBridge {
       ...(parentMode.mcpToolPatterns ? { mcpToolPatterns: [...parentMode.mcpToolPatterns] } : {}),
       ...(task.model ? { model: task.model, modelPolicy: "fixed" } : {}),
     };
+    const childMode = customMode && (customMode.type === "subagent" || customMode.type === "all")
+      ? withRuntimeToolAliases({
+          ...customMode,
+          type: "subagent",
+          provider: customMode.provider ?? parentConfiguration.providerId,
+          ...(task.model && customMode.routeOverrides ? { model: task.model, modelPolicy: "fixed" as const } : {}),
+        })
+      : builtInChildMode;
+    const childConfiguration = await readProviderConfiguration(this.host.context, this.profiles, task.model ?? "", childMode);
+    if (!childConfiguration.ok) throw Object.assign(new Error(childConfiguration.message), { code: "SUBAGENT_ROUTE_UNAVAILABLE" });
+    const provider = providerFromConfiguration(childConfiguration);
+    const existingActivity = this.subagentActivities.get(task.id);
+    if (existingActivity) {
+      const routed = { ...existingActivity, providerId: childConfiguration.providerId, providerName: childConfiguration.providerName, modelId: childConfiguration.model };
+      this.subagentActivities.set(task.id, routed);
+      this.host.post({ type: "subagentUpdate", subagent: routed });
+    }
+    await this.persistence.updateSubagentRun(task.id, { providerId: childConfiguration.providerId, modelId: childConfiguration.model }).catch(() => undefined);
     const childSession: AgentSession = {
       id: task.id,
       workspaceId: task.context.workspaceId ?? workspaceId(),
@@ -648,12 +685,17 @@ export class AgentRuntimeBridge {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       activeMode: childMode.slug,
-      providerId: configuration.providerId,
-      modelId: task.model ?? configuration.model,
+      providerId: childConfiguration.providerId,
+      modelId: childConfiguration.model,
       status: "running",
     };
     const permissionEngine = intersectPermissionEngines(modePermissionEngine(childMode), modePermissionEngine(parentMode, () => this.modes.get(parentMode.slug)));
-    const tools = this.createTools(undefined, task.signal, skillSnapshot).filter((tool) => modeAllowsAdvertisement(childMode, tool));
+    const nestedAgents = childMode.delegationAllowed ? this.availableSubagentSlugs(childMode, customDefinitions) : [];
+    const nestedOverrides = customDefinitions.filter((item) => item.routeOverrides && nestedAgents.includes(item.slug)).map((item) => item.slug);
+    const nestedTaskTool = childMode.delegationAllowed && nestedAgents.length
+      ? createNestedTaskTool(executionContext, nestedAgents, nestedOverrides)
+      : undefined;
+    const tools = [...this.createTools(undefined, task.signal, skillSnapshot), ...(nestedTaskTool ? [nestedTaskTool] : [])].filter((tool) => modeAllowsAdvertisement(childMode, tool));
     const rules = task.context.workspaceRules?.map((content, index) => ({ source: `delegated-rule-${index + 1}`, content })) ?? await loadWorkspaceInstructions();
     const childSkillIds = skillSnapshot.resolveIds([...childMode.skills, ...selectedSkillIds]).resolved;
     const [workspaceInstructions, activeSkills, defaultContext] = boundSourceGroups(await Promise.all([
@@ -686,8 +728,8 @@ export class AgentRuntimeBridge {
       signal: task.signal,
       initialMessages: [{ role: "user", content: userContent }],
       modelResolution: {
-        ...configuration.modelResolution,
-        sessionSelection: task.model ?? configuration.model,
+        ...childConfiguration.modelResolution,
+        sessionSelection: childConfiguration.model,
       },
       onEvent: (event) => this.onSubagentAgentEvent(task, event),
     });
@@ -706,13 +748,21 @@ export class AgentRuntimeBridge {
   }
 
   private onSubagentAgentEvent(task: SubagentExecutionRequest, event: AgentEvent): void {
-    if (event.type === "tool_started") this.host.post({ type: "toolCall", tool: toolActivity(`${task.agent} · ${event.call.toolName}`, event.call.id, "running") });
-    if (event.type === "tool_completed") this.host.post({ type: "toolCall", tool: toolActivity(`${task.agent} · ${event.call.toolName}`, event.call.id, event.result.isError ? "error" : "complete", event.result.content) });
+    if (event.type !== "tool_started" && event.type !== "tool_completed") return;
+    const previous = this.subagentActivities.get(task.id);
+    if (!previous) return;
+    const activity = event.type === "tool_started"
+      ? { state: "running" as const, summary: event.call.toolName }
+      : { state: event.result.isError ? "error" as const : "complete" as const, summary: event.call.toolName, ...(event.result.content ? { detail: compactText(event.result.content, 8_000) } : {}) };
+    const activities = [...(previous.activities ?? []).filter((item) => !(item.state === "running" && item.summary === activity.summary)), activity].slice(-50);
+    const updated = { ...previous, activities };
+    this.subagentActivities.set(task.id, updated);
+    this.host.post({ type: "subagentUpdate", subagent: updated });
   }
 
   private onSubagentEvent(sessionId: string, configuration: ProviderConfiguration, event: SubagentEvent): void {
     if (!this.runs.has(sessionId) || this.runs.get(sessionId)?.signal.aborted) return;
-    const activity = subagentActivity(event, configuration.model, event.type === "subagent_completed" || event.type === "subagent_failed" || event.type === "subagent_cancelled" ? this.subagentActivities.get(event.result.taskId) : undefined);
+    const activity = subagentActivity(event, configuration, event.type === "subagent_completed" || event.type === "subagent_failed" || event.type === "subagent_cancelled" ? this.subagentActivities.get(event.result.taskId) : undefined);
     this.subagentActivities.set(activity.id, activity);
     this.host.post({ type: "subagentUpdate", subagent: activity });
   }
@@ -782,6 +832,37 @@ export class AgentRuntimeBridge {
   private modeFor(slug: AgentMode): ModeDefinition {
     return this.modes.get(slug) ?? BUILT_IN_MODES.find((candidate) => candidate.slug === "ask")!;
   }
+
+  private customSubagentDefinitions(): SubagentDefinition[] {
+    const protectedSlugs = new Set(BUILT_IN_SUBAGENTS.map((item) => item.slug));
+    return (this.modes.entries?.() ?? [])
+      .map((entry) => entry.mode)
+      .filter((mode) => (mode.type === "subagent" || mode.type === "all") && !protectedSlugs.has(mode.slug))
+      .map((mode) => ({
+        agent: mode.slug,
+        slug: mode.slug,
+        name: mode.name,
+        description: mode.description ?? compactText(mode.instructions, 160),
+        instructions: mode.instructions,
+        maxAuthority: mode.delegationEffects === "read-only" ? "read-only" : "write",
+        authority: mode.delegationEffects,
+        delegationAllowed: mode.delegationAllowed,
+        allowedAgents: [...mode.allowedAgents],
+        type: "subagent" as const,
+        ...(mode.model ? { model: mode.model } : {}),
+        ...(mode.modelPolicy ? { modelPolicy: mode.modelPolicy } : {}),
+        ...(mode.routeOverrides ? { routeOverrides: true } : {}),
+      }));
+  }
+
+  private availableSubagentSlugs(mode: ModeDefinition, custom: readonly SubagentDefinition[]): string[] {
+    if (!mode.delegationAllowed) return [];
+    const definitions = [...BUILT_IN_SUBAGENTS, ...custom];
+    const allowed = mode.slug === "orchestrate" ? definitions.map((item) => item.slug) : mode.allowedAgents;
+    const available = new Set(definitions.map((item) => item.slug));
+    return [...new Set(allowed.map((item) => item === "implement" ? "implementer" : item.trim().toLowerCase()))]
+      .filter((slug) => available.has(slug));
+  }
 }
 
 interface ProviderConfiguration {
@@ -797,6 +878,18 @@ interface ProviderConfiguration {
   modelResolution: Omit<ModelResolutionInput, "mode">;
 }
 
+function providerFromConfiguration(configuration: ProviderConfiguration): OpenAICompatibleProvider {
+  return new OpenAICompatibleProvider({
+    id: configuration.providerId,
+    name: configuration.providerName,
+    baseURL: configuration.baseUrl,
+    apiKey: configuration.apiKey,
+    headers: configuration.headers,
+    models: configuration.models,
+    compatibility: configuration.compatibility,
+  });
+}
+
 async function readProviderConfiguration(context: vscode.ExtensionContext, profiles: ProviderProfileStore, selectedModel: string, mode: ModeDefinition): Promise<ProviderConfiguration | { ok: false; message: string }> {
   const resolved = await profiles.resolveProfile(mode.provider);
   if (!resolved) return { ok: false, message: mode.provider ? `Mode '${mode.slug}' requires provider profile '${mode.provider}', but it is not configured.` : "Provider is not configured. Open the provider manager, add an OpenAI-compatible endpoint, and activate it." };
@@ -808,24 +901,28 @@ async function readProviderConfiguration(context: vscode.ExtensionContext, profi
     ...mode,
     model: mode.modelPolicy === "fixed" ? mode.model : mode.model ?? profile.modeDefaults[mode.slug],
   };
+  const globalFallback = vscode.workspace.getConfiguration("agentdock").get<string>("defaultModel", "").trim();
+  const route = resolveProviderRoute({
+    profile,
+    mode,
+    selectedModel: selected,
+    discoveredModelIds: cached.map((item) => item.id),
+    globalFallback,
+  });
+  if (!route.ok) return route;
   const modelResolution: ModelResolutionInput = {
     sessionSelection: selected,
     mode: modeWithProfileDefault,
     profileDefault: profile.defaultModel,
-    globalFallback: vscode.workspace.getConfiguration("agentdock").get<string>("defaultModel", "").trim(),
+    globalFallback,
     ...(available.size ? { availableModels: available } : {}),
   };
-  const resolution = resolveModel(modelResolution);
-  const model = resolution.selectedModel;
-  if (!model || !resolution.available) {
-    return { ok: false, message: resolution.rejection?.reason ?? (model ? `Model '${model}' is unavailable for the active provider.` : "No model is configured. Add a model to the active provider profile or choose one in the chat header.") };
-  }
   return {
     ok: true,
     providerId: profile.id,
     providerName: profile.name,
     baseUrl: profile.baseUrl,
-    model,
+    model: route.model,
     apiKey,
     headers: profile.headers,
     compatibility: profile.compatibility,
@@ -1053,7 +1150,7 @@ function isImplementingMode(mode: ModeDefinition): boolean {
   return ["write_file", "edit_file", "apply_patch"].some((tool) => mode.tools.some((pattern) => globMatches(pattern, tool)));
 }
 
-function createTaskTool(orchestrator: SubagentOrchestrator, parentSignal?: AbortSignal): AgentTool {
+function createTaskTool(orchestrator: SubagentOrchestrator, agents: readonly string[], overrideAgents: readonly string[], parentSignal?: AbortSignal): AgentTool {
   return {
     name: "task",
     description: "Delegate a bounded, isolated task to a specialized subagent. Write authority requires explicit user approval.",
@@ -1064,10 +1161,10 @@ function createTaskTool(orchestrator: SubagentOrchestrator, parentSignal?: Abort
       required: ["agent", "prompt"],
       additionalProperties: false,
       properties: {
-        agent: { type: "string", enum: ["explore", "general", "test", "review", "research", "implementer", "implement"] },
+        agent: { type: "string", enum: [...agents] },
         prompt: { type: "string", minLength: 1, maxLength: 16_000 },
         contextRefs: { type: "array", maxItems: 32, items: { type: "string", maxLength: 512 } },
-        model: { type: "string", minLength: 1, maxLength: 256 },
+        ...(overrideAgents.length ? { model: { type: "string", minLength: 1, maxLength: 256, description: `Allowed only for: ${overrideAgents.join(", ")}` } } : {}),
         authority: { type: "string", enum: ["read-only", "same-as-parent", "write"] },
       },
     },
@@ -1075,6 +1172,28 @@ function createTaskTool(orchestrator: SubagentOrchestrator, parentSignal?: Abort
       const request = parseSubagentTask(input);
       return orchestrator.spawn({ ...request, signal: parentSignal ?? context.signal });
     },
+  };
+}
+
+function createNestedTaskTool(context: SubagentExecutionContext, agents: readonly string[], overrideAgents: readonly string[]): AgentTool {
+  return {
+    name: "task",
+    description: "Delegate a bounded child task to one of this agent's explicitly allowed subagents.",
+    category: "task",
+    risk: "medium",
+    inputSchema: {
+      type: "object",
+      required: ["agent", "prompt"],
+      additionalProperties: false,
+      properties: {
+        agent: { type: "string", enum: [...agents] },
+        prompt: { type: "string", minLength: 1, maxLength: 16_000 },
+        contextRefs: { type: "array", maxItems: 32, items: { type: "string", maxLength: 512 } },
+        ...(overrideAgents.length ? { model: { type: "string", minLength: 1, maxLength: 256, description: `Allowed only for: ${overrideAgents.join(", ")}` } } : {}),
+        authority: { type: "string", enum: ["read-only", "same-as-parent", "write"] },
+      },
+    },
+    execute: async (input: unknown) => context.spawn(parseSubagentTask(input)),
   };
 }
 
@@ -1113,7 +1232,7 @@ function parseSubagentTask(input: unknown): SubagentTaskRequest {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("task input must be an object");
   const value = input as Record<string, unknown>;
   if (typeof value.agent !== "string") throw new Error("task.agent must be a string");
-  if (!["explore", "general", "test", "review", "research", "implementer", "implement"].includes(value.agent)) throw new Error(`Unknown task.agent: ${value.agent}`);
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/i.test(value.agent.trim())) throw new Error(`Unknown task.agent: ${value.agent}`);
   if (typeof value.prompt !== "string" || !value.prompt.trim()) throw new Error("task.prompt must be a non-empty string");
   if (value.prompt.length > 16_000) throw new Error("task.prompt exceeds 16000 characters");
   const contextRefs = value.contextRefs;
@@ -1131,7 +1250,7 @@ function parseSubagentTask(input: unknown): SubagentTaskRequest {
   };
 }
 
-function subagentActivity(event: SubagentEvent, defaultModel: string, previous?: SubagentActivity): SubagentActivity {
+function subagentActivity(event: SubagentEvent, defaultRoute: ProviderConfiguration, previous?: SubagentActivity): SubagentActivity {
   if (event.type === "subagent_completed" || event.type === "subagent_failed" || event.type === "subagent_cancelled") {
     const result = event.result;
     return {
@@ -1140,7 +1259,10 @@ function subagentActivity(event: SubagentEvent, defaultModel: string, previous?:
       task: previous?.task ?? result.agent,
       state: result.status === "completed" ? "complete" : result.status === "cancelled" ? "cancelled" : "error",
       depth: previous?.depth ?? 1,
-      modelId: previous?.modelId ?? defaultModel,
+      modelId: previous?.modelId ?? defaultRoute.model,
+      providerId: previous?.providerId ?? defaultRoute.providerId,
+      providerName: previous?.providerName ?? defaultRoute.providerName,
+      ...(previous?.parentRunId ? { parentRunId: previous.parentRunId } : {}),
       summary: result.summary,
       ...(result.filesInspected ? { filesInspected: [...result.filesInspected] } : {}),
       ...(result.filesChanged ? { filesChanged: [...result.filesChanged] } : {}),
@@ -1154,7 +1276,10 @@ function subagentActivity(event: SubagentEvent, defaultModel: string, previous?:
     task: compactText(task.prompt, 1_000),
     state: event.type === "subagent_started" ? "running" : event.type === "subagent_rejected" ? "error" : "queued",
     depth: task.depth,
-    modelId: task.model ?? defaultModel,
+    modelId: task.model ?? defaultRoute.model,
+    providerId: defaultRoute.providerId,
+    providerName: defaultRoute.providerName,
+    ...(task.parentTaskId ? { parentRunId: task.parentTaskId } : {}),
     ...(event.type === "subagent_rejected" ? { summary: event.error.message } : {}),
   };
 }

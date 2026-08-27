@@ -73,7 +73,7 @@ export interface ModeRegistryEntry {
 
 const PERMISSION_EFFECTS: readonly PermissionEffect[] = ["allow", "ask", "deny"];
 const MODE_FIELDS = new Set([
-  "name", "slug", "description", "type", "icon", "colorToken", "model", "modelPolicy", "provider",
+  "name", "slug", "description", "type", "icon", "colorToken", "model", "modelPolicy", "provider", "routeOverrides",
   "temperature", "topP", "reasoningEffort", "maxOutputTokens", "steps", "tools", "permission", "skills",
   "skillsMode", "toolsMode", "delegationAllowed", "allowedAgents", "delegationEffects", "filePatterns",
   "commandPatterns", "mcpToolPatterns", "defaultContextSources", "responseTemplate",
@@ -305,6 +305,7 @@ function validateMode(mode: ModeDefinition, markdown: string): ModeDiagnostic[] 
   }
   if (mode.modelPolicy !== undefined && !["fixed", "preferred", "user-selectable"].includes(mode.modelPolicy)) add("modelPolicy", `Unknown model policy "${String(mode.modelPolicy)}".`);
   if (mode.modelPolicy === "fixed" && (typeof mode.model !== "string" || !mode.model.trim())) add("model", "A fixed mode must declare a model.");
+  if (mode.routeOverrides !== undefined && typeof mode.routeOverrides !== "boolean") add("routeOverrides", "Route overrides must be a boolean.");
   if (mode.toolsMode !== undefined && !["merge", "replace"].includes(mode.toolsMode)) add("toolsMode", `Unknown tools merge mode "${String(mode.toolsMode)}".`);
   if (mode.skillsMode !== undefined && !["merge", "replace"].includes(mode.skillsMode)) add("skillsMode", `Unknown skills merge mode "${String(mode.skillsMode)}".`);
   if (mode.delegationEffects !== undefined && !["read-only", "same-as-parent", "write"].includes(mode.delegationEffects)) add("delegationEffects", `Unknown delegation effect "${String(mode.delegationEffects)}".`);

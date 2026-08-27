@@ -98,4 +98,15 @@ describe("custom mode registry", () => {
       expect.objectContaining({ field: "mystery", line: 5, severity: "warning" }),
     ]));
   });
+
+  test("parses and validates routeOverrides frontmatter", () => {
+    const valid = loadModeRegistry({ user: `---\nname: Routed\nrouteOverrides: true\n---\nWork.` });
+    expect(valid.ok).toBe(true);
+    expect(valid.get("routed")?.routeOverrides).toBe(true);
+
+    const invalid = loadModeRegistry({ user: `---\nname: Invalid\nrouteOverrides: not-a-boolean\n---\nWork.` });
+    expect(invalid.ok).toBe(false);
+    expect(invalid.diagnostics.some((d) => d.field === "routeOverrides" && d.severity === "error")).toBe(true);
+  });
 });
+

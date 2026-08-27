@@ -88,6 +88,16 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .subagent-state { color: var(--forge-muted); font: 9px var(--forge-code); text-transform: uppercase; }
 .subagent-card > p, .subagent-card > ul, .subagent-files, .subagent-model { margin: 0 10px 10px 41px; color: var(--forge-text-secondary); font-size: 10px; line-height: 1.5; }
 .subagent-model { color: var(--forge-muted); font-family: var(--forge-code); }
+.subagent-node { max-width: 640px; margin: 9px auto; }
+.subagent-node > .subagent-card { margin: 0; }
+.subagent-children { display: grid; gap: 7px; margin: 7px 0 0 18px; padding-left: 10px; border-left: 1px solid color-mix(in srgb, var(--forge-cyan) 28%, var(--forge-border)); }
+.subagent-children .subagent-node { width: 100%; margin: 0; }
+.subagent-activity { margin: 0 10px 10px 41px; border: 1px solid var(--forge-border); border-radius: 6px; overflow: hidden; }
+.subagent-activity > summary { padding: 5px 7px; color: var(--forge-muted); font: 9px var(--forge-code); }
+.subagent-activity-row { display: grid; grid-template-columns: 14px 1fr; gap: 5px; padding: 5px 7px; border-top: 1px solid var(--forge-border); color: var(--forge-text-tertiary); font-size: 10px; }
+.subagent-activity-row > span { color: var(--forge-cyan); }
+.subagent-activity-row.error > span { color: var(--forge-red); }
+.subagent-activity-row pre { grid-column: 2; max-height: 150px; margin: 2px 0 0; overflow: auto; color: var(--forge-muted); font: 9px/1.45 var(--forge-code); white-space: pre-wrap; }
 .subagent-files { display: flex; flex-wrap: wrap; gap: 4px; }
 .subagent-files span { width: 100%; color: var(--forge-muted); font: 9px var(--forge-code); text-transform: uppercase; }
 .subagent-files code { padding: 2px 4px; border-radius: 3px; background: var(--forge-surface); }
@@ -356,6 +366,10 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .preset-label { color: var(--forge-muted); font-weight: 500; }
 .preset-pill { padding: 2px 8px; border: 1px solid var(--forge-border); border-radius: 999px; background: var(--forge-surface); color: var(--forge-text-secondary); font-size: 10px; cursor: pointer; transition: all .15s ease; }
 .preset-pill:hover { border-color: var(--forge-cyan); color: var(--forge-cyan); background: color-mix(in srgb, var(--forge-cyan) 10%, transparent); }
+.preset-pill.selected { border-color: #c084fc; color: #c084fc; background: rgba(168,85,247,.1); }
+.provider-preset-help { display: grid; gap: 3px; margin: -4px 0 12px; padding: 8px 9px; border-left: 2px solid #c084fc; color: var(--forge-text-tertiary); background: rgba(168,85,247,.06); font-size: 10px; }
+.provider-preset-help b { color: var(--forge-text-secondary); }
+.provider-preset-help code { overflow: hidden; color: var(--forge-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .form-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .form-field label { font-size: 11px; font-weight: 600; color: var(--forge-text-secondary); }
 .form-field .req { color: var(--forge-red); }

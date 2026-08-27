@@ -68,6 +68,7 @@ export type UiToExtensionMessage =
 
 export interface SaveProviderProfileInput {
   id?: string;
+  presetId?: string;
   name: string;
   type?: string;
   baseUrl: string;
@@ -82,7 +83,12 @@ export interface SaveCustomModeInput {
   scope: "project" | "global";
   type: "all" | "primary" | "subagent";
   model?: string;
+  provider?: string;
   modelPolicy?: "user-selectable" | "preferred" | "fixed";
+  routeOverrides?: boolean;
+  delegationAllowed?: boolean;
+  allowedAgents?: string[];
+  skills?: string[];
   steps: number;
   instructions: string;
   authority: "read" | "write";
@@ -134,6 +140,17 @@ export interface ProviderProfileView {
   hasApiKey: boolean;
 }
 
+export interface ProviderPresetView {
+  id: string;
+  name: string;
+  description: string;
+  category: "cloud" | "local" | "proxy";
+  baseUrl: string;
+  defaultModel?: string;
+  helpUrl?: string;
+  helpText?: string;
+}
+
 export interface ModeDetailView {
   id: string;
   slug: string;
@@ -142,6 +159,7 @@ export interface ModeDetailView {
   scope: "built-in" | "project" | "global";
   type: "primary" | "subagent" | "all";
   model?: string;
+  provider?: string;
   modelPolicy?: "fixed" | "preferred" | "user-selectable";
   steps?: number;
   tools?: string[];
@@ -159,6 +177,7 @@ export interface CustomModeDiagnosticView {
 export interface HarnessSettingsState {
   activeProfile?: ProviderProfileView;
   profiles: ProviderProfileView[];
+  providerPresets: ProviderPresetView[];
   modes: ModeDetailView[];
   diagnostics: CustomModeDiagnosticView[];
   defaultMode: string;
@@ -233,15 +252,19 @@ export interface ToolActivity {
 
 export interface SubagentActivity {
   id: string;
-  agent: "explore" | "general" | "test" | "review" | "research" | "implementer";
+  agent: string;
   task: string;
   state: "queued" | "running" | "complete" | "error" | "cancelled";
   depth: number;
   modelId?: string;
+  providerId?: string;
+  providerName?: string;
+  parentRunId?: string;
   summary?: string;
   filesInspected?: string[];
   filesChanged?: string[];
   followups?: string[];
+  activities?: Array<{ state: "running" | "complete" | "error"; summary: string; detail?: string }>;
 }
 
 export interface ToolApproval {

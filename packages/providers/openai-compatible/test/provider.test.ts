@@ -29,6 +29,15 @@ describe("SSE parser", () => {
 });
 
 describe("OpenAI-compatible provider", () => {
+  test("rejects a successful but protocol-incompatible model catalog", async () => {
+    const provider = new OpenAICompatibleProvider({
+      id: "bad-models",
+      baseURL: "http://127.0.0.1:8317/v1",
+      fetch: async () => new Response(JSON.stringify({ unexpected: true }), { status: 200, headers: { "content-type": "application/json" } }),
+    });
+    await expect(provider.listModels()).rejects.toMatchObject({ code: "INVALID_MODELS_RESPONSE" });
+  });
+
   test("normalizes text, reasoning, fragmented tool calls, usage and finish events", async () => {
     const body = [
       'data: {"id":"x","choices":[{"delta":{"content":"Hel"}}]}\n\n',

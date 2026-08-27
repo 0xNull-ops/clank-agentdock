@@ -14,6 +14,7 @@ import {
   type SkillOptionView,
   type PlanView,
   type ProviderProfileView,
+  type ProviderPresetView,
   type ModeDetailView,
   type CustomModeDiagnosticView,
   type HarnessSettingsState,
@@ -34,6 +35,7 @@ import {
 import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
 import { CustomModeStore } from "./runtime/custom-modes";
 import { SkillStore } from "./runtime/skills";
+import { providerPreset, providerPresets } from "./runtime/provider-presets";
 import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActivityFromRecord, toolActivitiesFromSnapshot } from "./shared/session-history";
 
 const VIEW_ID = "agentdock.agentView";
@@ -354,10 +356,6 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
               try {
                 const fetched = await this.runtime.refreshModels(false, profile.id);
                 if (fetched && fetched.length > 0) {
-                  const updatedProfile = await this.providerProfiles.getProfile(profile.id);
-                  if (updatedProfile && !updatedProfile.defaultModel) {
-                    await this.providerProfiles.updateProfile(profile.id, { defaultModel: fetched[0]?.id });
-                  }
                   void vscode.window.showInformationMessage(`Auto-discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"} for ${profile.name}.`);
                 }
               } catch {
@@ -379,7 +377,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         const profile = await this.providerProfiles.getProfile(message.profileId);
         if (!profile) return;
         try {
-          const fetched = await this.runtime.refreshModels(false, profile.id);
+          const fetched = await this.runtime.refreshModels(false, profile.id, true);
           const count = fetched?.length ?? 0;
           this.post({
             type: "providerTestResult",
@@ -387,9 +385,6 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             success: true,
             message: `Reachable (${count} model${count === 1 ? "" : "s"} discovered)`,
           });
-          if (fetched && fetched.length > 0 && !profile.defaultModel) {
-            await this.providerProfiles.updateProfile(profile.id, { defaultModel: fetched[0]?.id });
-          }
           await this.refreshProviderSelection();
           await this.postSettingsState();
         } catch (error) {
@@ -397,7 +392,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             type: "providerTestResult",
             profileId: message.profileId,
             success: false,
-            message: error instanceof Error ? error.message : String(error),
+            message: providerConnectionError(error),
           });
         }
         return;
@@ -407,9 +402,6 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         if (profile) {
           try {
             const fetched = await this.runtime.refreshModels(true, profile.id);
-            if (fetched && fetched.length > 0 && !profile.defaultModel) {
-              await this.providerProfiles.updateProfile(profile.id, { defaultModel: fetched[0]?.id });
-            }
           } catch (error) {
             void vscode.window.showErrorMessage(`Failed to fetch models: ${error instanceof Error ? error.message : String(error)}`);
           }
@@ -517,6 +509,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       }
       case "saveProviderProfile": {
         const input = message.profile;
+        const preset = input.presetId ? providerPreset(input.presetId) : undefined;
         const profileId = input.id || safeModeSlug(input.name) || `provider-${Date.now().toString(36)}`;
         const existing = await this.providerProfiles.getProfile(profileId);
         if (existing) {
@@ -537,11 +530,11 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             defaultModel: input.defaultModel?.trim() || undefined,
             modeDefaults: {},
             compatibility: {
-              supportsDeveloperRole: true,
-              supportsParallelToolCalls: true,
-              requiresAssistantReasoningReplay: false,
-              requiresAssistantFrameReplay: false,
-              sendMaxTokensAs: "max_tokens",
+              supportsDeveloperRole: preset?.compatibility.supportsDeveloperRole ?? true,
+              supportsParallelToolCalls: preset?.compatibility.supportsParallelToolCalls ?? true,
+              requiresAssistantReasoningReplay: preset?.compatibility.requiresAssistantReasoningReplay ?? false,
+              requiresAssistantFrameReplay: preset?.compatibility.requiresAssistantFrameReplay ?? false,
+              sendMaxTokensAs: preset?.compatibility.sendMaxTokensAs ?? "max_tokens",
             },
           });
         }
@@ -553,10 +546,6 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         try {
           const fetched = await this.runtime.refreshModels(false, profileId);
           if (fetched && fetched.length > 0) {
-            const updatedProfile = await this.providerProfiles.getProfile(profileId);
-            if (updatedProfile && !updatedProfile.defaultModel) {
-              await this.providerProfiles.updateProfile(profileId, { defaultModel: fetched[0]?.id });
-            }
             void vscode.window.showInformationMessage(`Auto-discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"} for ${input.name.trim()}.`);
           }
         } catch {
@@ -576,11 +565,16 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           name: input.name.trim(),
           slug,
           type: input.type,
+          provider: input.provider?.trim() || undefined,
           model: input.model?.trim() || undefined,
           modelPolicy: input.modelPolicy ?? "user-selectable",
+          routeOverrides: input.routeOverrides ?? false,
           steps: input.steps || 20,
           instructions: input.instructions.trim(),
           ...modeAuthority(input.authority),
+          ...(input.skills ? { skills: input.skills } : {}),
+          ...(input.delegationAllowed !== undefined ? { delegationAllowed: input.delegationAllowed } : {}),
+          ...(input.allowedAgents ? { allowedAgents: input.allowedAgents } : {}),
         });
         await this.customModes.create(scope, markdown, slug);
         await this.customModes.reload();
@@ -1332,6 +1326,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       scope: entry.scope === "user" ? "global" : entry.scope,
       type: entry.mode.type,
       model: entry.mode.model,
+      provider: entry.mode.provider,
       modelPolicy: entry.mode.modelPolicy,
       steps: entry.mode.steps,
       tools: entry.mode.tools,
@@ -1354,6 +1349,16 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     return {
       activeProfile,
       profiles,
+      providerPresets: providerPresets().map<ProviderPresetView>(({ id, name, description, category, baseUrl, defaultModel, helpUrl, helpText }) => ({
+        id,
+        name,
+        description,
+        category,
+        baseUrl,
+        ...(defaultModel ? { defaultModel } : {}),
+        ...(helpUrl ? { helpUrl } : {}),
+        ...(helpText ? { helpText } : {}),
+      })),
       modes,
       diagnostics,
       defaultMode,
@@ -1583,6 +1588,18 @@ function isSkillIds(value: unknown): value is string[] {
     && value.every((item) => typeof item === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item));
 }
 
+function providerConnectionError(error: unknown): string {
+  const record = error && typeof error === "object" ? error as { message?: unknown; status?: unknown } : undefined;
+  const status = typeof record?.status === "number" ? record.status : undefined;
+  const detail = typeof record?.message === "string" ? record.message : error instanceof Error ? error.message : String(error);
+  if (status === 401 || status === 403) return `Authentication failed (HTTP ${status}). Check this profile's API key or the proxy's client-auth settings.`;
+  if (status === 429) return "The provider is rate limited (HTTP 429). Wait or explicitly choose another configured route.";
+  if (status !== undefined) return `The endpoint returned HTTP ${status}: ${detail.slice(0, 300)}`;
+  if (/abort|timeout/i.test(detail)) return "The provider model probe timed out. Check that the endpoint is running and reachable.";
+  if (/fetch|network|connect|ECONNREFUSED|ENOTFOUND/i.test(detail)) return `The provider is unreachable: ${detail.slice(0, 300)}`;
+  return `The endpoint is not OpenAI-compatible: ${detail.slice(0, 300)}`;
+}
+
 function safeModeSlug(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64) || "custom";
 }
@@ -1617,6 +1634,7 @@ function modeMarkdown(mode: ModeDefinition): string {
     ...(mode.icon ? { icon: mode.icon } : {}),
     ...(mode.colorToken ? { colorToken: mode.colorToken } : {}),
     ...(mode.provider ? { provider: mode.provider } : {}),
+    ...(mode.routeOverrides !== undefined ? { routeOverrides: mode.routeOverrides } : {}),
     ...(mode.model ? { model: mode.model } : {}),
     modelPolicy: mode.modelPolicy ?? "user-selectable",
     ...(mode.reasoningEffort ? { reasoningEffort: mode.reasoningEffort } : {}),

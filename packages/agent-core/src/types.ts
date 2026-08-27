@@ -175,6 +175,8 @@ export interface ModeDefinition {
   model?: string;
   modelPolicy?: ModelPolicy;
   provider?: string;
+  /** Permit task-level model overrides for this definition. Provider URLs/credentials are never overridable. */
+  routeOverrides?: boolean;
   temperature?: number;
   topP?: number;
   reasoningEffort?: NormalizedChatRequest["reasoningEffort"];

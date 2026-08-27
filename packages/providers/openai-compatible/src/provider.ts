@@ -62,13 +62,19 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const response = await this.requestFetch(`${this.config.baseURL}/models`, { method: "GET", headers: this.headers(), signal });
     if (!response.ok) throw await this.httpError(response);
     const body = await response.json() as Record<string, unknown>;
-    const rawList: unknown[] = Array.isArray(body.data)
+    const rawList: unknown[] | undefined = Array.isArray(body.data)
       ? body.data
       : Array.isArray(body.models)
         ? body.models
         : Array.isArray(body)
           ? body
-          : [];
+          : undefined;
+    if (!rawList) throw {
+      code: "INVALID_MODELS_RESPONSE",
+      message: "Provider /models response must be an array or contain a data/models array.",
+      status: response.status,
+      retryable: false,
+    } satisfies NormalizedProviderError;
     return rawList
       .map((item: unknown) => {
         const rawObj = item && typeof item === "object" ? (item as Record<string, unknown>) : {};

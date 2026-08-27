@@ -15,6 +15,7 @@ import type {
   SubagentActivity,
   HarnessSettingsState,
   ProviderProfileView,
+  ProviderPresetView,
   ModeDetailView,
   CustomModeDiagnosticView,
   SkillOptionView,
@@ -360,7 +361,7 @@ function renderChat(): void {
 
     const transcriptContent = timeline.length === 0
       ? emptyState(mode.label)
-      : timeline.map(renderTimelineItem).join("") + workingIndicatorHtml;
+      : renderTimeline() + workingIndicatorHtml;
 
     appRoot.innerHTML = `
       <section class="shell" id="chat-shell">
@@ -607,7 +608,7 @@ function renderTranscript(): void {
       ? `<div class="agent-working-indicator waiting" id="agent-working-indicator"><span class="working-spinner">!</span><span class="working-text">Waiting for approval…</span></div>`
       : "";
 
-  transcript.innerHTML = timeline.map(renderTimelineItem).join("") + workingIndicatorHtml;
+  transcript.innerHTML = renderTimeline() + workingIndicatorHtml;
   scrollToBottom();
 }
 
@@ -622,7 +623,7 @@ function renderTimelineItem(item: TimelineItem): string {
     case "tool":
       return toolCard(item.tool);
     case "subagent":
-      return subagentCard(item.subagent);
+      return subagentTree(item.subagent);
     case "plan":
       return planCard(item.plan);
     case "checkpoint":
@@ -630,6 +631,22 @@ function renderTimelineItem(item: TimelineItem): string {
     case "approval":
       return approvalCard(item.approval);
   }
+}
+
+function renderTimeline(): string {
+  const ids = new Set(timeline.filter((item): item is Extract<TimelineItem, { kind: "subagent" }> => item.kind === "subagent").map((item) => item.id));
+  return timeline
+    .filter((item) => item.kind !== "subagent" || !item.subagent.parentRunId || !ids.has(item.subagent.parentRunId))
+    .map(renderTimelineItem)
+    .join("");
+}
+
+function subagentTree(item: SubagentActivity): string {
+  const children = timeline
+    .filter((entry): entry is Extract<TimelineItem, { kind: "subagent" }> => entry.kind === "subagent" && entry.subagent.parentRunId === item.id)
+    .map((entry) => subagentTree(entry.subagent))
+    .join("");
+  return `<div class="subagent-node" id="subagent-${safeCssToken(item.id)}">${subagentCard(item)}${children ? `<div class="subagent-children">${children}</div>` : ""}</div>`;
 }
 
 function appendStreamingText(text: string): void {
@@ -759,30 +776,14 @@ function onSubagentUpdate(subagent: SubagentActivity): void {
   const existing = timeline.find((item) => item.kind === "subagent" && item.id === subagent.id);
   if (existing && existing.kind === "subagent") {
     existing.subagent = subagent;
-    const existingEl = document.querySelector<HTMLElement>(`#subagent-${safeCssToken(subagent.id)}`);
-    if (existingEl) {
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = subagentCard(subagent);
-      if (wrapper.firstElementChild) existingEl.replaceWith(wrapper.firstElementChild);
-      return;
-    }
+    renderTranscript();
+    return;
   }
 
   const newItem: TimelineItem = { kind: "subagent", id: subagent.id, subagent };
   timeline.push(newItem);
 
-  const wrapper = document.createElement("div");
-  wrapper.innerHTML = subagentCard(subagent);
-  const cardNode = wrapper.firstElementChild;
-  if (cardNode) {
-    const workingEl = document.querySelector("#agent-working-indicator");
-    if (workingEl) {
-      transcript.insertBefore(cardNode, workingEl);
-    } else {
-      transcript.appendChild(cardNode);
-    }
-  }
-  scrollToBottom();
+  renderTranscript();
 }
 
 function onPlanChanged(newPlan?: PlanView): void {
@@ -1002,6 +1003,7 @@ function renderSettings(): void {
 let isAddingProvider = false;
 let editingProfileId: string | null = null;
 let editingApiKeyProfileId: string | null = null;
+let selectedProviderPresetId: string | undefined;
 let isAddingMode = false;
 
 function renderModesTab(): string {
@@ -1073,6 +1075,7 @@ function renderModesTab(): string {
 
           <div class="card-badges">
             <span class="meta-badge">Target: <b>${item.type}</b></span>
+            ${item.provider ? `<span class="meta-badge">Provider: <b>${escapeHtml(item.provider)}</b></span>` : ""}
             <span class="meta-badge">Model: <b>${escapeHtml(item.model || (item.modelPolicy ? `${item.modelPolicy}` : "Default"))}</b></span>
             <span class="meta-badge">Steps: <b>${item.steps ?? 20}</b></span>
             ${item.tools?.length ? `<span class="meta-badge">Tools: <b>${escapeHtml(item.tools.join(", "))}</b></span>` : ""}
@@ -1140,8 +1143,30 @@ function renderModeForm(): string {
       </div>
 
       <div class="form-field">
-        <label for="mode-model">Model Override (Optional)</label>
-        <input type="text" id="mode-model" placeholder="Leave empty for session/provider default" />
+        <label for="mode-provider">Provider Route (Optional)</label>
+        <select id="mode-provider" class="setting-select"><option value="">Inherit active provider</option>${(settingsState?.profiles ?? []).map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</select>
+      </div>
+
+      <div class="form-row">
+        <div class="form-field">
+          <label for="mode-model">Model Route (Optional)</label>
+          <input type="text" id="mode-model" placeholder="Provider model id" />
+        </div>
+        <div class="form-field">
+          <label for="mode-model-policy">Model Policy</label>
+          <select id="mode-model-policy" class="setting-select"><option value="user-selectable">User-selectable override</option><option value="preferred">Prefer configured model</option><option value="fixed">Fixed configured model</option></select>
+        </div>
+      </div>
+
+      <div class="form-field">
+        <label class="checkbox-label"><input type="checkbox" id="mode-delegation" /> Allow this agent to spawn subagents</label>
+        <label class="checkbox-label"><input type="checkbox" id="mode-route-overrides" /> Allow parent task to override this agent's model</label>
+        <input type="text" id="mode-allowed-agents" placeholder="Allowed child slugs, comma separated" />
+      </div>
+
+      <div class="form-field">
+        <label for="mode-skills">Required Skills (Optional)</label>
+        <input type="text" id="mode-skills" placeholder="Skill ids, comma separated" />
       </div>
 
       <div class="form-field">
@@ -1263,6 +1288,8 @@ function renderProviderForm(editingProfile?: ProviderProfileView): string {
   const profileUrl = editingProfile?.baseUrl ?? "";
   const profileDefaultModel = editingProfile?.defaultModel ?? "";
   const hasKey = editingProfile?.hasApiKey ?? false;
+  const presets = settingsState?.providerPresets ?? [];
+  const selectedPreset = selectedProviderPresetId ? presets.find((item) => item.id === selectedProviderPresetId) : undefined;
 
   return `
     <form class="settings-form-card" id="provider-form" data-profile-id="${escapeHtml(editingProfile?.id ?? "")}">
@@ -1273,12 +1300,9 @@ function renderProviderForm(editingProfile?: ProviderProfileView): string {
 
       <div class="preset-pills">
         <span class="preset-label">Presets:</span>
-        <button type="button" class="preset-pill" data-preset="openai">OpenAI</button>
-        <button type="button" class="preset-pill" data-preset="ollama">Ollama (Local)</button>
-        <button type="button" class="preset-pill" data-preset="openrouter">OpenRouter</button>
-        <button type="button" class="preset-pill" data-preset="vllm">vLLM</button>
-        <button type="button" class="preset-pill" data-preset="deepseek">DeepSeek</button>
+        ${presets.map((preset) => `<button type="button" class="preset-pill ${selectedPreset?.id === preset.id ? "selected" : ""}" data-preset="${escapeHtml(preset.id)}" title="${escapeHtml(preset.description)}">${escapeHtml(preset.name)}${preset.category === "proxy" ? " (Proxy)" : preset.category === "local" ? " (Local)" : ""}</button>`).join("")}
       </div>
+      <div id="provider-preset-help">${selectedPreset ? providerPresetHelp(selectedPreset) : ""}</div>
 
       <div class="form-field">
         <label for="provider-name">Profile Name <span class="req">*</span></label>
@@ -1307,6 +1331,11 @@ function renderProviderForm(editingProfile?: ProviderProfileView): string {
         <button type="submit" class="settings-action-btn primary">${isEditing ? "Save Changes" : "Add Provider"}</button>
       </div>
     </form>`;
+}
+
+function providerPresetHelp(preset: ProviderPresetView): string {
+  const help = preset.helpText ?? preset.description;
+  return `<div class="provider-preset-help"><b>${escapeHtml(preset.name)}</b><span>${escapeHtml(help)}</span>${preset.helpUrl ? `<code>${escapeHtml(preset.helpUrl)}</code>` : ""}</div>`;
 }
 
 function renderGeneralTab(): string {
@@ -1412,7 +1441,9 @@ function subagentCard(item: SubagentActivity): string {
   const inspected = item.filesInspected?.length ? `<div class="subagent-files"><span>inspected</span>${item.filesInspected.slice(0, 8).map((file) => `<code>${escapeHtml(file)}</code>`).join("")}</div>` : "";
   const changed = item.filesChanged?.length ? `<div class="subagent-files changed"><span>changed</span>${item.filesChanged.slice(0, 8).map((file) => `<code>${escapeHtml(file)}</code>`).join("")}</div>` : "";
   const followups = item.followups?.length ? `<ul>${item.followups.slice(0, 5).map((followup) => `<li>${escapeHtml(followup)}</li>`).join("")}</ul>` : "";
-  return `<details class="subagent-card" ${item.state === "running" || item.state === "queued" ? "open" : ""}><summary><span class="subagent-icon ${item.state}">${icon}</span><span class="subagent-main"><span class="kicker">SUBAGENT · DEPTH ${item.depth}</span><b>${escapeHtml(item.agent)}</b><small>${escapeHtml(item.task)}</small></span><span class="subagent-state">${item.state}</span></summary>${item.modelId ? `<div class="subagent-model">model · ${escapeHtml(item.modelId)}</div>` : ""}${item.summary ? `<p>${escapeHtml(item.summary)}</p>` : ""}${inspected}${changed}${followups}</details>`;
+  const activities = item.activities?.length ? `<details class="subagent-activity"><summary>Activity · ${item.activities.length}</summary>${item.activities.map((activity) => `<div class="subagent-activity-row ${activity.state}"><span>${activity.state === "complete" ? "✓" : activity.state === "error" ? "!" : "↻"}</span><b>${escapeHtml(activity.summary)}</b>${activity.detail ? `<pre>${escapeHtml(activity.detail)}</pre>` : ""}</div>`).join("")}</details>` : "";
+  const route = [item.providerName ?? item.providerId, item.modelId].filter(Boolean).join(" / ");
+  return `<details class="subagent-card" ${item.state === "running" || item.state === "queued" ? "open" : ""}><summary><span class="subagent-icon ${item.state}">${icon}</span><span class="subagent-main"><span class="kicker">SUBAGENT · DEPTH ${item.depth}</span><b>${escapeHtml(item.agent)}</b><small>${escapeHtml(item.task)}</small></span><span class="subagent-state">${item.state}</span></summary>${route ? `<div class="subagent-model">route · ${escapeHtml(route)}</div>` : ""}${activities}${item.summary ? `<p>${escapeHtml(item.summary)}</p>` : ""}${inspected}${changed}${followups}</details>`;
 }
 
 function approvalCard(item: ToolApproval): string {
@@ -1695,9 +1726,15 @@ function wireSettingsInteractions(): void {
     const authority = (document.querySelector<HTMLSelectElement>("#mode-authority")?.value ?? "write") as "read" | "write";
     const steps = Number(document.querySelector<HTMLInputElement>("#mode-steps")?.value ?? 20);
     const model = (document.querySelector<HTMLInputElement>("#mode-model")?.value ?? "").trim();
+    const provider = (document.querySelector<HTMLSelectElement>("#mode-provider")?.value ?? "").trim();
+    const modelPolicy = (document.querySelector<HTMLSelectElement>("#mode-model-policy")?.value ?? "user-selectable") as "user-selectable" | "preferred" | "fixed";
+    const delegationAllowed = document.querySelector<HTMLInputElement>("#mode-delegation")?.checked ?? false;
+    const routeOverrides = document.querySelector<HTMLInputElement>("#mode-route-overrides")?.checked ?? false;
+    const allowedAgents = commaSeparatedIds(document.querySelector<HTMLInputElement>("#mode-allowed-agents")?.value ?? "");
+    const requiredSkills = commaSeparatedIds(document.querySelector<HTMLInputElement>("#mode-skills")?.value ?? "");
     const instructions = (document.querySelector<HTMLTextAreaElement>("#mode-instructions")?.value ?? "").trim();
 
-    if (!name || !slug || !instructions) return;
+    if (!name || !slug || !instructions || (modelPolicy === "fixed" && !model)) return;
     vscode.postMessage({
       type: "saveCustomMode",
       mode: {
@@ -1708,6 +1745,12 @@ function wireSettingsInteractions(): void {
         authority,
         steps: Number.isSafeInteger(steps) && steps > 0 ? steps : 20,
         model: model || undefined,
+        provider: provider || undefined,
+        modelPolicy,
+        delegationAllowed,
+        routeOverrides,
+        allowedAgents,
+        skills: requiredSkills,
         instructions,
       },
     });
@@ -1746,6 +1789,7 @@ function wireSettingsInteractions(): void {
   // Provider Form wiring
   document.querySelectorAll<HTMLButtonElement>("[data-action=add-profile]").forEach((btn) => btn.addEventListener("click", () => {
     isAddingProvider = true;
+    selectedProviderPresetId = undefined;
     editingProfileId = null;
     editingApiKeyProfileId = null;
     render();
@@ -1754,38 +1798,27 @@ function wireSettingsInteractions(): void {
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=cancel-provider-form]").forEach((btn) => btn.addEventListener("click", () => {
     isAddingProvider = false;
+    selectedProviderPresetId = undefined;
     editingProfileId = null;
     render();
   }));
 
   document.querySelectorAll<HTMLButtonElement>("[data-preset]").forEach((btn) => btn.addEventListener("click", () => {
-    const preset = btn.dataset.preset;
+    const presetId = btn.dataset.preset;
+    const preset = settingsState?.providerPresets.find((item) => item.id === presetId);
     const nameInput = document.querySelector<HTMLInputElement>("#provider-name");
     const urlInput = document.querySelector<HTMLInputElement>("#provider-url");
     const modelInput = document.querySelector<HTMLInputElement>("#provider-model");
 
-    if (!nameInput || !urlInput || !modelInput) return;
-    if (preset === "openai") {
-      nameInput.value = "OpenAI";
-      urlInput.value = "https://api.openai.com/v1";
-      modelInput.value = "gpt-4o";
-    } else if (preset === "ollama") {
-      nameInput.value = "Ollama";
-      urlInput.value = "http://localhost:11434/v1";
-      modelInput.value = "llama3.1";
-    } else if (preset === "openrouter") {
-      nameInput.value = "OpenRouter";
-      urlInput.value = "https://openrouter.ai/api/v1";
-      modelInput.value = "anthropic/claude-3.5-sonnet";
-    } else if (preset === "vllm") {
-      nameInput.value = "vLLM";
-      urlInput.value = "http://localhost:8000/v1";
-      modelInput.value = "";
-    } else if (preset === "deepseek") {
-      nameInput.value = "DeepSeek";
-      urlInput.value = "https://api.deepseek.com/v1";
-      modelInput.value = "deepseek-chat";
-    }
+    if (!nameInput || !urlInput || !modelInput || !preset) return;
+    selectedProviderPresetId = preset.id;
+    document.querySelectorAll<HTMLButtonElement>("[data-preset]").forEach((p) => p.classList.remove("selected"));
+    btn.classList.add("selected");
+    nameInput.value = preset.name;
+    urlInput.value = preset.baseUrl;
+    modelInput.value = preset.defaultModel ?? "";
+    const help = document.querySelector<HTMLElement>("#provider-preset-help");
+    if (help) help.innerHTML = providerPresetHelp(preset);
   }));
 
   document.querySelector<HTMLFormElement>("#provider-form")?.addEventListener("submit", (event) => {
@@ -1802,6 +1835,7 @@ function wireSettingsInteractions(): void {
       type: "saveProviderProfile",
       profile: {
         id,
+        presetId: selectedProviderPresetId,
         name,
         baseUrl,
         defaultModel: defaultModel || undefined,
@@ -1809,6 +1843,7 @@ function wireSettingsInteractions(): void {
       },
     });
     isAddingProvider = false;
+    selectedProviderPresetId = undefined;
     editingProfileId = null;
   });
 
@@ -1977,6 +2012,10 @@ function escapeHtml(value: string): string {
 
 function safeCssToken(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 80) || "custom";
+}
+
+function commaSeparatedIds(value: string): string[] {
+  return [...new Set(value.split(",").map((item) => item.trim().toLowerCase()).filter((item) => /^[a-z0-9][a-z0-9._-]{0,127}$/.test(item)))].slice(0, 32);
 }
 
 vscode.postMessage({ type: "ready" });

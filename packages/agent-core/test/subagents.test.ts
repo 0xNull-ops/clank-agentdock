@@ -10,6 +10,43 @@ import { BUILT_IN_MODES } from "../src/modes";
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe("subagent runtime", () => {
+  test("accepts injected canonical custom subagent definitions", async () => {
+    const runtime = new SubagentOrchestrator({
+      definitions: [{
+        agent: "security-audit",
+        slug: "security-audit",
+        name: "Security audit",
+        description: "Inspect security boundaries",
+        instructions: "Review the bounded scope.",
+        maxAuthority: "read-only",
+        authority: "read-only",
+        delegationAllowed: false,
+        allowedAgents: [],
+        type: "subagent",
+      }],
+      executor: { execute: async (request) => ({ summary: `ran ${request.agent}` }) },
+      rootParent: { mode: "orchestrate", authority: "read-only" },
+    });
+
+    const result = await runtime.spawn({ agent: "security-audit", prompt: "inspect auth" });
+    expect(result.status).toBe("completed");
+    expect(result.agent).toBe("security-audit");
+    expect(result.summary).toBe("ran security-audit");
+  });
+
+  test("allows task model overrides only when the injected definition opts in", async () => {
+    const definition = {
+      agent: "routed", slug: "routed", name: "Routed", description: "Routed agent", instructions: "Work.",
+      maxAuthority: "read-only" as const, authority: "read-only" as const, delegationAllowed: false,
+      allowedAgents: [], type: "subagent" as const,
+    };
+    const denied = new SubagentOrchestrator({ definitions: [definition], executor: { execute: async () => "unexpected" }, rootParent: { mode: "orchestrate", authority: "read-only" } });
+    expect((await denied.spawn({ agent: "routed", prompt: "work", model: "other" })).error?.code).toBe("ROUTE_OVERRIDE_FORBIDDEN");
+
+    const allowed = new SubagentOrchestrator({ definitions: [{ ...definition, routeOverrides: true }], executor: { execute: async (request) => request.model }, rootParent: { mode: "orchestrate", authority: "read-only" } });
+    expect((await allowed.spawn({ agent: "routed", prompt: "work", model: "other" })).summary).toBe("other");
+  });
+
   test("uses depth one by default and permits depth two for explicit Orchestrate", () => {
     const executor = { execute: async () => ({ summary: "done" }) };
     expect(new SubagentOrchestrator({ executor }).stats.maxDepth).toBe(1);
