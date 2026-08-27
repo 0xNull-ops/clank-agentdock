@@ -44,4 +44,10 @@ await build({
 await copyFile(resolve(extensionRoot, "src/webview/styles.css"), resolve(outputDirectory, "webview/styles.css"));
 await copyFile(resolve(extensionRoot, "src/webview/generated-tokens.css"), resolve(outputDirectory, "webview/generated-tokens.css"));
 
+try {
+  await copyFile(resolve(extensionRoot, "resources/Freebuff2API"), resolve(outputDirectory, "Freebuff2API"));
+} catch {
+  // ignore
+}
+
 console.log("Bundled self-contained VS Code extension host, sql.js WASM, and webview.");

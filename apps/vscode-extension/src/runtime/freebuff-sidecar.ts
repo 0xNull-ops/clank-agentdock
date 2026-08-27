@@ -169,22 +169,28 @@ export class FreebuffSidecarManager {
   }
 
   async findOrInstallBinary(): Promise<string> {
-    // 1. Check GOPATH bin
+    // 1. Check bundled binary in extension
+    const bundledDist = path.join(__dirname, "Freebuff2API");
+    if (fs.existsSync(bundledDist)) return bundledDist;
+    const bundledResources = path.join(__dirname, "..", "resources", "Freebuff2API");
+    if (fs.existsSync(bundledResources)) return bundledResources;
+
+    // 2. Check custom storage dir
+    const localBin = path.join(this.storageDir, "Freebuff2API");
+    if (fs.existsSync(localBin)) return localBin;
+
+    // 3. Check GOPATH bin
     const home = os.homedir();
     const gopathBin = path.join(home, "go", "bin", "Freebuff2API");
     if (fs.existsSync(gopathBin)) return gopathBin;
 
-    // 2. Check system PATH
+    // 4. Check system PATH
     try {
       const whichResult = child_process.execSync("which Freebuff2API", { encoding: "utf8" }).trim();
       if (whichResult && fs.existsSync(whichResult)) return whichResult;
     } catch {
       // not in path
     }
-
-    // 3. Check custom storage dir
-    const localBin = path.join(this.storageDir, "Freebuff2API");
-    if (fs.existsSync(localBin)) return localBin;
 
     // 4. Auto-install using go install
     try {
