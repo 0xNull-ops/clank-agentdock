@@ -1032,6 +1032,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       if (sessionId === this.sessionId) {
         await this.startNewSession();
       }
+      void vscode.window.showInformationMessage(`Deleted session “${session.title}”.`);
     } finally {
       await this.postSessionList();
     }

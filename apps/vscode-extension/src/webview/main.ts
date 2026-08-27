@@ -2074,9 +2074,20 @@ function wireChatInteractions(): void {
     vscode.postMessage({ type: "requestSettings" });
     render();
   });
-  document.querySelector<HTMLButtonElement>("[data-action=history]")?.addEventListener("click", () => {
+  document.querySelector<HTMLButtonElement>("[data-action=history]")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     historyOpen = !historyOpen;
+    modelMenuOpen = false;
+    skillMenuOpen = false;
     updateSessionPicker();
+    if (historyOpen) {
+      setTimeout(() => {
+        const search = document.querySelector<HTMLInputElement>("#session-search");
+        search?.focus();
+        search?.select();
+      }, 50);
+    }
   });
   document.querySelectorAll<HTMLButtonElement>("[data-copy-msg]").forEach((btn) => btn.addEventListener("click", (e) => {
     e.preventDefault();
@@ -2567,7 +2578,29 @@ function wireSessionMenuInteractions(): void {
       vscode.postMessage({ type: "deleteSession", sessionId });
     }
   }));
+
+  if (!historyOutsideClickListenerAttached && typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    historyOutsideClickListenerAttached = true;
+    document.addEventListener("click", (e) => {
+      if (!historyOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const isInside = target.closest("#session-menu-container") || target.closest("[data-action=history]");
+      if (!isInside) {
+        historyOpen = false;
+        updateSessionPicker();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && historyOpen) {
+        historyOpen = false;
+        updateSessionPicker();
+      }
+    });
+  }
 }
+
+let historyOutsideClickListenerAttached = false;
 
 function activeSessionTitle(): string {
   return sessions.find((session) => session.id === activeSessionId)?.title || "Current session";
