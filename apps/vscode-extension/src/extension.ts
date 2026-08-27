@@ -12,6 +12,10 @@ import {
   type SubagentActivity,
   type ModeOption,
   type PlanView,
+  type ProviderProfileView,
+  type ModeDetailView,
+  type CustomModeDiagnosticView,
+  type HarnessSettingsState,
   MODEL_OPTIONS,
   BUILT_IN_MODES,
 } from "./shared/protocol";
@@ -307,8 +311,167 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         this.contextSnapshots.delete(message.refId);
         return;
       case "openSettings":
-        await this.manageHarnessSettings();
+      case "requestSettings":
+        await this.postSettingsState();
         return;
+      case "activateProvider": {
+        const profile = await this.providerProfiles.getProfile(message.profileId);
+        if (profile) await this.activateProvider(profile);
+        await this.postSettingsState();
+        return;
+      }
+      case "setProviderApiKey": {
+        const profile = await this.providerProfiles.getProfile(message.profileId);
+        if (profile) {
+          const key = await vscode.window.showInputBox({
+            title: `API key · ${profile.name}`,
+            password: true,
+            ignoreFocusOut: true,
+            prompt: "Leave empty to clear the stored key",
+          });
+          if (key !== undefined) {
+            await this.providerProfiles.setApiKey(profile.id, key.trim() || undefined);
+            await this.postSettingsState();
+          }
+        }
+        return;
+      }
+      case "clearProviderApiKey": {
+        await this.providerProfiles.clearApiKey(message.profileId);
+        await this.postSettingsState();
+        return;
+      }
+      case "testProviderConnection": {
+        const profile = await this.providerProfiles.getProfile(message.profileId);
+        if (!profile) return;
+        try {
+          const fetched = await this.fetchProviderModels(profile);
+          this.post({
+            type: "providerTestResult",
+            profileId: message.profileId,
+            success: true,
+            message: `Reachable (${fetched.length} model${fetched.length === 1 ? "" : "s"} found)`,
+          });
+        } catch (error) {
+          this.post({
+            type: "providerTestResult",
+            profileId: message.profileId,
+            success: false,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+      case "fetchProviderModels": {
+        const profile = await this.providerProfiles.getProfile(message.profileId);
+        if (profile) {
+          try {
+            const fetched = await this.fetchProviderModels(profile);
+            void vscode.window.showInformationMessage(`Found ${fetched.length} models for ${profile.name}.`);
+          } catch (error) {
+            void vscode.window.showErrorMessage(`Failed to fetch models: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          await this.postSettingsState();
+        }
+        return;
+      }
+      case "addProvider":
+        await this.addProviderProfile();
+        await this.postSettingsState();
+        return;
+      case "editProvider": {
+        const profile = await this.providerProfiles.getProfile(message.profileId);
+        if (profile) {
+          await this.manageProviderProfile(profile);
+          await this.postSettingsState();
+        }
+        return;
+      }
+      case "deleteProvider": {
+        const profile = await this.providerProfiles.getProfile(message.profileId);
+        if (profile) {
+          const confirmed = await vscode.window.showWarningMessage(
+            `Delete provider profile “${profile.name}”?`,
+            { modal: true },
+            "Delete"
+          );
+          if (confirmed === "Delete") {
+            await this.providerProfiles.deleteProfile(profile.id);
+            await this.postSettingsState();
+          }
+        }
+        return;
+      }
+      case "createMode":
+        await this.createMode();
+        await this.postSettingsState();
+        return;
+      case "importMode":
+        await this.importMode();
+        await this.postSettingsState();
+        return;
+      case "reloadModes":
+        await this.customModes.reload();
+        await this.postSettingsState();
+        void vscode.window.showInformationMessage("Agent Harness modes reloaded.");
+        return;
+      case "openModeSource": {
+        const entry = this.customModes.entry(message.slug);
+        if (entry) await this.customModes.openSource(entry);
+        return;
+      }
+      case "duplicateMode": {
+        const entry = this.customModes.entry(message.slug);
+        if (entry) {
+          await this.createMode(entry.mode);
+          await this.postSettingsState();
+        }
+        return;
+      }
+      case "deleteMode": {
+        const entry = this.customModes.entry(message.slug);
+        if (entry && this.customModes.canManage(entry)) {
+          const confirmed = await vscode.window.showWarningMessage(
+            `Delete mode “${entry.mode.name}”?`,
+            { modal: true, detail: entry.source },
+            "Delete"
+          );
+          if (confirmed === "Delete") {
+            await this.customModes.delete(entry);
+            await this.postSettingsState();
+          }
+        }
+        return;
+      }
+      case "openModeDiagnostic": {
+        try {
+          const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(message.source, true));
+          const editor = await vscode.window.showTextDocument(document, { preview: false });
+          if (message.line) {
+            const position = new vscode.Position(Math.max(0, message.line - 1), 0);
+            editor.selection = new vscode.Selection(position, position);
+            editor.revealRange(new vscode.Range(position, position));
+          }
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      case "openAdvancedSettings":
+        await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:freebuff.freebuff-agent-harness-vscode");
+        return;
+      case "saveDefaultMode": {
+        const config = vscode.workspace.getConfiguration("agentdock");
+        await config.update("defaultMode", message.mode, vscode.ConfigurationTarget.Global);
+        await this.postSettingsState();
+        return;
+      }
+      case "saveMaxSteps": {
+        const config = vscode.workspace.getConfiguration("agentdock");
+        await config.update("maxSteps", message.steps, vscode.ConfigurationTarget.Global);
+        await this.postSettingsState();
+        return;
+      }
       case "approvePlan":
         await this.enqueueSessionOperation(() => this.approvePlan(message.planId, message.revision));
         return;
@@ -979,6 +1142,71 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "error", kind: "workspace", message: `Mode '${previous}' was removed, shadowed, or changed source, so this session must explicitly select an installed mode before running.` });
   }
 
+  public async getHarnessSettingsState(): Promise<HarnessSettingsState> {
+    const rawProfiles = await this.providerProfiles.listProfiles();
+    const activeId = await this.providerProfiles.getActiveProfileId();
+    const profiles: ProviderProfileView[] = await Promise.all(
+      rawProfiles.map(async (p) => {
+        const apiKey = await this.providerProfiles.getApiKey(p.id);
+        return {
+          id: p.id,
+          name: p.name,
+          type: p.type,
+          baseUrl: p.baseUrl,
+          defaultModel: p.defaultModel,
+          models: p.manualModels.map((m) => ({ id: m.id, displayName: m.displayName })),
+          isActive: p.id === activeId,
+          hasApiKey: Boolean(apiKey && apiKey.trim().length > 0),
+        };
+      })
+    );
+    const activeProfile = profiles.find((p) => p.isActive) ?? profiles[0];
+
+    const modeEntries = this.customModes.entries();
+    const modes: ModeDetailView[] = modeEntries.map((entry) => ({
+      id: entry.mode.slug,
+      slug: entry.mode.slug,
+      name: entry.mode.name,
+      description: entry.mode.description ?? entry.mode.instructions.slice(0, 160),
+      scope: entry.scope === "user" ? "global" : entry.scope,
+      type: entry.mode.type,
+      model: entry.mode.model,
+      modelPolicy: entry.mode.modelPolicy,
+      steps: entry.mode.steps,
+      tools: entry.mode.tools,
+      canManage: this.customModes.canManage(entry),
+      colorToken: entry.mode.colorToken,
+    }));
+
+    const diagnostics: CustomModeDiagnosticView[] = this.customModes.diagnostics().map((d) => ({
+      message: d.message,
+      severity: d.severity,
+      source: d.source,
+      line: d.line,
+    }));
+
+    const config = vscode.workspace.getConfiguration("agentdock");
+    const defaultMode = config.get<string>("defaultMode", "ask");
+    const defaultModel = config.get<string>("defaultModel", MODEL_OPTIONS[0].id);
+    const maxSteps = config.get<number>("maxSteps", 20);
+
+    return {
+      activeProfile,
+      profiles,
+      modes,
+      diagnostics,
+      defaultMode,
+      defaultModel,
+      maxSteps,
+      workspaceName: vscode.workspace.name,
+    };
+  }
+
+  public async postSettingsState(): Promise<void> {
+    const state = await this.getHarnessSettingsState();
+    this.post({ type: "settingsState", state });
+  }
+
   private post(message: ExtensionToUiMessage): void {
     void this.view?.webview.postMessage(message);
   }
@@ -1070,7 +1298,31 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
     case "listSessions":
     case "pickContext":
     case "openSettings":
+    case "requestSettings":
+    case "addProvider":
+    case "createMode":
+    case "importMode":
+    case "reloadModes":
+    case "openAdvancedSettings":
       return true;
+    case "activateProvider":
+    case "setProviderApiKey":
+    case "clearProviderApiKey":
+    case "testProviderConnection":
+    case "fetchProviderModels":
+    case "editProvider":
+    case "deleteProvider":
+      return typeof message.profileId === "string" && message.profileId.length > 0 && message.profileId.length <= 256;
+    case "openModeSource":
+    case "duplicateMode":
+    case "deleteMode":
+      return typeof message.slug === "string" && message.slug.length > 0 && message.slug.length <= 128;
+    case "openModeDiagnostic":
+      return typeof message.source === "string" && (message.line === undefined || (typeof message.line === "number" && Number.isSafeInteger(message.line)));
+    case "saveDefaultMode":
+      return typeof message.mode === "string" && message.mode.length > 0 && message.mode.length <= 128;
+    case "saveMaxSteps":
+      return typeof message.steps === "number" && Number.isSafeInteger(message.steps) && message.steps >= 1 && message.steps <= 100;
     case "openSession":
     case "renameSession":
     case "duplicateSession":

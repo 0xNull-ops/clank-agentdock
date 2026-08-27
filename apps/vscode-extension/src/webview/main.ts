@@ -13,6 +13,10 @@ import type {
   PlanView,
   SessionHistoryItem,
   SubagentActivity,
+  HarnessSettingsState,
+  ProviderProfileView,
+  ModeDetailView,
+  CustomModeDiagnosticView,
 } from "../shared/protocol";
 import { BUILT_IN_MODES } from "../shared/protocol";
 
@@ -56,6 +60,12 @@ window.addEventListener("unhandledrejection", (event) => {
   if (startupSucceeded) return;
   renderStartupFailure("An unhandled promise rejection stopped the chat surface.", event.reason);
 });
+
+let currentView: "chat" | "settings" = "chat";
+let settingsTab: "modes" | "providers" | "general" = "modes";
+let settingsQuery = "";
+let settingsState: HarnessSettingsState | undefined;
+const providerTestResults: Record<string, { success: boolean; message: string; loading?: boolean }> = {};
 
 let modes: ModeOption[] = [...BUILT_IN_MODES];
 let models: ModelOption[] = [
@@ -181,13 +191,22 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       checkpointConflict = message;
       messages = [...messages, { id: `checkpoint-conflict-${Date.now()}`, role: "system", text: `${message.message} Affected paths: ${message.paths.slice(0, 5).join(", ")}${message.paths.length > 5 ? "…" : ""}`, createdAt: Date.now() }];
       break;
+    case "settingsState":
+      settingsState = message.state;
+      break;
+    case "providerTestResult":
+      providerTestResults[message.profileId] = {
+        success: message.success,
+        message: message.message,
+        loading: false,
+      };
+      break;
     case "error":
       historyBusy = false;
       messages = [...messages, { id: `error-${Date.now()}`, role: "system", text: message.message, createdAt: Date.now() }];
       runState = "error";
       break;
     case "usageUpdated":
-      // Usage is visualized by the compact meter in the header when wired.
       break;
     case "textDelta":
       appendStreamingText(message.text);
@@ -196,14 +215,34 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
   render();
 });
 
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && currentView === "settings") {
+    currentView = "chat";
+    render();
+  }
+});
+
 function render(): void {
+  if (currentView === "settings") {
+    renderSettings();
+    wireSettingsInteractions();
+    return;
+  }
+  renderChat();
+  wireChatInteractions();
+}
+
+function renderChat(): void {
   const mode = modes.find((item) => item.id === activeMode) ?? modes[0];
   const visibleModels = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
   appRoot.innerHTML = `
     <section class="shell">
       <header class="header">
         <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><div><p class="eyebrow">FORGE / LOCAL HARNESS</p><h1>Agent chat</h1></div></div>
-        <div class="header-actions"><button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}"><span class="session-picker-icon">◷</span><span class="session-picker-label">${escapeHtml(activeSessionTitle())}</span><span class="session-picker-chevron">⌄</span></button><button class="icon-button" data-action="settings" aria-label="Open Agent Harness settings">⋯</button></div>
+        <div class="header-actions">
+          <button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}"><span class="session-picker-icon">◷</span><span class="session-picker-label">${escapeHtml(activeSessionTitle())}</span><span class="session-picker-chevron">⌄</span></button>
+          <button class="icon-button" data-action="open-settings" aria-label="Open Agent Harness settings" title="Extension Settings">⚙</button>
+        </div>
       </header>
       ${historyOpen ? sessionMenu() : ""}
       <div class="control-strip">
@@ -224,9 +263,262 @@ function render(): void {
         <div class="composer-meta"><span><span class="live-dot"></span> local session</span><button type="button" class="text-button" data-action="new">new session</button></div>
       </footer>
     </section>`;
-  wireInteractions();
   const transcript = document.querySelector<HTMLElement>("#transcript");
   if (transcript) transcript.scrollTop = transcript.scrollHeight;
+}
+
+function renderSettings(): void {
+  const modesCount = settingsState?.modes.length ?? modes.length;
+  const profilesCount = settingsState?.profiles.length ?? 1;
+
+  appRoot.innerHTML = `
+    <section class="shell settings-shell">
+      <header class="header settings-header">
+        <div class="settings-nav">
+          <button class="settings-back-btn" data-action="back-to-chat" aria-label="Back to chat" title="Back to Chat (Esc)">
+            <span class="back-chevron">‹</span>
+            <span>Chat</span>
+          </button>
+          <div class="settings-title-wrap">
+            <p class="eyebrow">FORGE / CONFIGURATION</p>
+            <h1>Agent Harness settings</h1>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="icon-button" data-action="back-to-chat" title="Close settings (Esc)">✕</button>
+        </div>
+      </header>
+
+      <div class="settings-tabs-bar">
+        <nav class="settings-tabs" role="tablist">
+          <button class="settings-tab ${settingsTab === "modes" ? "active" : ""}" data-tab="modes" role="tab" aria-selected="${settingsTab === "modes"}">
+            <span class="tab-glyph">👥</span>
+            <span>Agents &amp; Modes</span>
+            <span class="settings-count">${modesCount}</span>
+          </button>
+          <button class="settings-tab ${settingsTab === "providers" ? "active" : ""}" data-tab="providers" role="tab" aria-selected="${settingsTab === "providers"}">
+            <span class="tab-glyph">🗄</span>
+            <span>Providers</span>
+            <span class="settings-count">${profilesCount}</span>
+          </button>
+          <button class="settings-tab ${settingsTab === "general" ? "active" : ""}" data-tab="general" role="tab" aria-selected="${settingsTab === "general"}">
+            <span class="tab-glyph">⚙️</span>
+            <span>General</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="settings-search-wrap">
+        <span class="search-icon">🔍</span>
+        <input id="settings-search" class="settings-search" type="search" value="${escapeHtml(settingsQuery)}" placeholder="Filter ${settingsTab === "modes" ? "modes, tools, models" : settingsTab === "providers" ? "providers, endpoints, models" : "settings"}…" aria-label="Search settings" />
+        ${settingsQuery ? `<button class="clear-search-btn" data-action="clear-search" aria-label="Clear filter">×</button>` : ""}
+      </div>
+
+      <main class="settings-body" id="settings-scroll-body">
+        ${settingsTab === "modes" ? renderModesTab() : settingsTab === "providers" ? renderProvidersTab() : renderGeneralTab()}
+      </main>
+    </section>`;
+}
+
+function renderModesTab(): string {
+  const allModes: ModeDetailView[] = settingsState?.modes ?? modes.map((m) => ({
+    id: m.id,
+    slug: m.id,
+    name: m.label,
+    description: m.description,
+    scope: m.source === "global" ? "global" : m.source === "project" ? "project" : "built-in",
+    type: "all",
+    canManage: m.source !== "built-in",
+  }));
+
+  const query = settingsQuery.trim().toLowerCase();
+  const filtered = query
+    ? allModes.filter((m) =>
+        m.name.toLowerCase().includes(query) ||
+        m.slug.toLowerCase().includes(query) ||
+        (m.description && m.description.toLowerCase().includes(query)) ||
+        m.scope.toLowerCase().includes(query) ||
+        (m.model && m.model.toLowerCase().includes(query))
+      )
+    : allModes;
+
+  const diagnostics = settingsState?.diagnostics ?? [];
+
+  return `
+    <div class="settings-actions-bar">
+      <button class="settings-action-btn primary" data-action="create-mode">＋ New Mode</button>
+      <button class="settings-action-btn" data-action="import-mode">⇩ Import Mode</button>
+      <button class="settings-action-btn" data-action="reload-modes">↻ Reload Modes</button>
+    </div>
+
+    ${diagnostics.length ? `
+      <div class="settings-diagnostics-card">
+        <div class="diag-header">
+          <span class="diag-icon">⚠️</span>
+          <b>Mode Diagnostics (${diagnostics.length})</b>
+        </div>
+        <ul class="diag-list">
+          ${diagnostics.map((d) => `
+            <li>
+              <button data-action="open-diagnostic" data-source="${escapeHtml(d.source ?? "")}" data-line="${d.line ?? 1}">
+                <span class="diag-sev ${d.severity}">${d.severity}</span>
+                <span>${escapeHtml(d.message)}</span>
+                <small>${escapeHtml(d.source ?? "")}${d.line ? `:${d.line}` : ""}</small>
+              </button>
+            </li>
+          `).join("")}
+        </ul>
+      </div>
+    ` : ""}
+
+    <div class="modes-grid">
+      ${filtered.length ? filtered.map((item) => `
+        <article class="settings-card mode-card">
+          <div class="card-header">
+            <div class="mode-header-info">
+              <span class="mode-dot mode-${safeCssToken(item.slug)}"></span>
+              <div>
+                <h3>${escapeHtml(item.name)} <code class="slug-tag">${escapeHtml(item.slug)}</code></h3>
+                <p class="card-desc">${escapeHtml(item.description || "Custom agent prompt and tool instructions")}</p>
+              </div>
+            </div>
+            <span class="scope-badge ${item.scope}">${item.scope}</span>
+          </div>
+
+          <div class="card-badges">
+            <span class="meta-badge">Target: <b>${item.type}</b></span>
+            <span class="meta-badge">Model: <b>${escapeHtml(item.model || (item.modelPolicy ? `${item.modelPolicy}` : "Default"))}</b></span>
+            <span class="meta-badge">Steps: <b>${item.steps ?? 20}</b></span>
+            ${item.tools?.length ? `<span class="meta-badge">Tools: <b>${escapeHtml(item.tools.join(", "))}</b></span>` : ""}
+          </div>
+
+          <div class="card-actions">
+            ${item.canManage ? `<button class="card-btn" data-action="edit-mode" data-slug="${escapeHtml(item.slug)}">✎ Open / Edit .md</button>` : ""}
+            <button class="card-btn" data-action="duplicate-mode" data-slug="${escapeHtml(item.slug)}">⧉ Duplicate</button>
+            ${item.canManage ? `<button class="card-btn danger" data-action="delete-mode" data-slug="${escapeHtml(item.slug)}">🗑 Delete</button>` : ""}
+          </div>
+        </article>
+      `).join("") : `<p class="session-empty">No modes match “${escapeHtml(settingsQuery)}”.</p>`}
+    </div>`;
+}
+
+function renderProvidersTab(): string {
+  const profiles: ProviderProfileView[] = settingsState?.profiles ?? [
+    {
+      id: "openai-compatible",
+      name: "OpenAI Compatible",
+      type: "openai-compatible",
+      baseUrl: "https://api.openai.com/v1",
+      models: [{ id: "gpt-4o" }],
+      isActive: true,
+      hasApiKey: false,
+    },
+  ];
+
+  const query = settingsQuery.trim().toLowerCase();
+  const filtered = query
+    ? profiles.filter((p) =>
+        p.name.toLowerCase().includes(query) ||
+        p.id.toLowerCase().includes(query) ||
+        p.baseUrl.toLowerCase().includes(query) ||
+        (p.defaultModel && p.defaultModel.toLowerCase().includes(query))
+      )
+    : profiles;
+
+  return `
+    <div class="settings-actions-bar">
+      <button class="settings-action-btn primary full-width" data-action="add-profile">＋ Add Provider Profile</button>
+    </div>
+
+    <div class="providers-list">
+      ${filtered.length ? filtered.map((profile) => {
+        const testResult = providerTestResults[profile.id];
+        return `
+          <article class="settings-card ${profile.isActive ? "active-profile" : ""}">
+            <div class="card-header">
+              <div>
+                <h3>
+                  ${escapeHtml(profile.name)}
+                  ${profile.isActive ? `<span class="profile-active-tag">● Active</span>` : ""}
+                </h3>
+                <p class="card-desc"><code>${escapeHtml(profile.baseUrl)}</code></p>
+              </div>
+              <span class="scope-badge">${escapeHtml(profile.type)}</span>
+            </div>
+
+            <div class="profile-meta-grid">
+              <div class="profile-row">
+                <span>API KEY:</span>
+                <span class="key-status ${profile.hasApiKey ? "set" : "unset"}">
+                  ${profile.hasApiKey ? "● Configured securely in SecretStorage" : "○ Not set (Public/Local)"}
+                </span>
+              </div>
+              <div class="profile-row">
+                <span>DEFAULT MODEL:</span>
+                <code>${escapeHtml(profile.defaultModel || "None (session picker)")}</code>
+              </div>
+              <div class="profile-row">
+                <span>MODELS:</span>
+                <span>${profile.models.length} configured</span>
+              </div>
+            </div>
+
+            ${testResult ? `
+              <div class="test-result-box ${testResult.success ? "success" : "error"}">
+                ${testResult.success ? "✓" : "✕"} ${escapeHtml(testResult.message)}
+              </div>
+            ` : ""}
+
+            <div class="card-actions">
+              ${!profile.isActive ? `<button class="card-btn primary" data-action="activate-profile" data-profile-id="${escapeHtml(profile.id)}">✓ Set as Active</button>` : ""}
+              <button class="card-btn" data-action="set-api-key" data-profile-id="${escapeHtml(profile.id)}">🔑 ${profile.hasApiKey ? "Change API Key" : "Set API Key"}</button>
+              ${profile.hasApiKey ? `<button class="card-btn" data-action="clear-api-key" data-profile-id="${escapeHtml(profile.id)}">Clear Key</button>` : ""}
+              <button class="card-btn" data-action="test-connection" data-profile-id="${escapeHtml(profile.id)}">⚡ Test Connection</button>
+              <button class="card-btn" data-action="fetch-models" data-profile-id="${escapeHtml(profile.id)}">↻ Fetch Models</button>
+              <button class="card-btn" data-action="edit-profile" data-profile-id="${escapeHtml(profile.id)}">✎ Edit</button>
+              ${profiles.length > 1 ? `<button class="card-btn danger" data-action="delete-profile" data-profile-id="${escapeHtml(profile.id)}">🗑 Delete</button>` : ""}
+            </div>
+          </article>
+        `;
+      }).join("") : `<p class="session-empty">No providers match “${escapeHtml(settingsQuery)}”.</p>`}
+    </div>`;
+}
+
+function renderGeneralTab(): string {
+  const currentDefaultMode = settingsState?.defaultMode ?? activeMode;
+  const currentMaxSteps = settingsState?.maxSteps ?? 20;
+
+  return `
+    <div class="general-settings">
+      <div class="general-setting-item">
+        <label for="settings-default-mode">Default Startup Mode</label>
+        <p class="setting-help">The default role and permissions assigned to new agent sessions.</p>
+        <select id="settings-default-mode" class="setting-select">
+          ${modes.map((m) => `<option value="${escapeHtml(m.id)}" ${m.id === currentDefaultMode ? "selected" : ""}>${escapeHtml(m.label)} (${escapeHtml(m.source ?? "built-in")})</option>`).join("")}
+        </select>
+      </div>
+
+      <div class="general-setting-item">
+        <label for="settings-max-steps">Max Agent Steps</label>
+        <p class="setting-help">Maximum autonomous tool loops before pausing for user continuation.</p>
+        <input id="settings-max-steps" class="setting-input" type="number" min="1" max="100" value="${currentMaxSteps}" />
+      </div>
+
+      <div class="general-setting-item">
+        <label>Advanced Extension Preferences</label>
+        <p class="setting-help">Configure headers, smart commit options, and proxy settings in VS Code JSON settings.</p>
+        <button class="card-btn" data-action="open-advanced-settings" style="margin-top: 4px;">Open VS Code Extension Settings</button>
+      </div>
+
+      <div class="general-setting-item">
+        <label>Storage &amp; Runtime</label>
+        <p class="setting-help">Local-first durable SQLite persistence with safe checkpoints.</p>
+        <div class="profile-meta-grid" style="margin-top: 6px;">
+          <div class="profile-row"><span>PERSISTENCE:</span><code>SQLite (sql.js WASM)</code></div>
+          <div class="profile-row"><span>WORKSPACE:</span><code>${escapeHtml(settingsState?.workspaceName ?? "Active")}</code></div>
+        </div>
+      </div>
+    </div>`;
 }
 
 function emptyState(mode: string): string {
@@ -271,7 +563,7 @@ function contextChip(ref: ContextRef): string {
   return `<span class="context-chip"><span>${ref.kind === "file" ? "▧" : "⌘"}</span>${escapeHtml(ref.label)}<button data-remove-context="${ref.id}" aria-label="Remove ${escapeHtml(ref.label)}">×</button></span>`;
 }
 
-function wireInteractions(): void {
+function wireChatInteractions(): void {
   document.querySelector<HTMLSelectElement>("#mode-select")?.addEventListener("change", (event) => {
     activeMode = (event.target as HTMLSelectElement).value as AgentMode;
     vscode.postMessage({ type: "changeMode", mode: activeMode });
@@ -300,7 +592,11 @@ function wireInteractions(): void {
     const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
     if (input) { input.value = button.dataset.prompt ?? ""; input.focus(); }
   }));
-  document.querySelector<HTMLButtonElement>("[data-action=settings]")?.addEventListener("click", () => vscode.postMessage({ type: "openSettings" }));
+  document.querySelector<HTMLButtonElement>("[data-action=open-settings]")?.addEventListener("click", () => {
+    currentView = "settings";
+    vscode.postMessage({ type: "requestSettings" });
+    render();
+  });
   document.querySelector<HTMLButtonElement>("[data-action=history]")?.addEventListener("click", () => { historyOpen = !historyOpen; render(); });
   document.querySelector<HTMLButtonElement>("[data-action=refresh-sessions]")?.addEventListener("click", () => {
     vscode.postMessage({ type: "listSessions" });
@@ -364,6 +660,123 @@ function wireInteractions(): void {
       vscode.postMessage({ type, planId: plan.id, revision: plan.revision });
     });
   }
+}
+
+function wireSettingsInteractions(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-action=back-to-chat]").forEach((btn) => btn.addEventListener("click", () => {
+    currentView = "chat";
+    render();
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((btn) => btn.addEventListener("click", () => {
+    const tab = btn.dataset.tab as "modes" | "providers" | "general" | undefined;
+    if (tab) {
+      settingsTab = tab;
+      render();
+    }
+  }));
+
+  document.querySelector<HTMLInputElement>("#settings-search")?.addEventListener("input", (event) => {
+    settingsQuery = (event.target as HTMLInputElement).value;
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>("[data-action=clear-search]")?.addEventListener("click", () => {
+    settingsQuery = "";
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>("[data-action=create-mode]")?.addEventListener("click", () => {
+    vscode.postMessage({ type: "createMode" });
+  });
+
+  document.querySelector<HTMLButtonElement>("[data-action=import-mode]")?.addEventListener("click", () => {
+    vscode.postMessage({ type: "importMode" });
+  });
+
+  document.querySelector<HTMLButtonElement>("[data-action=reload-modes]")?.addEventListener("click", () => {
+    vscode.postMessage({ type: "reloadModes" });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=open-diagnostic]").forEach((btn) => btn.addEventListener("click", () => {
+    const source = btn.dataset.source;
+    const line = btn.dataset.line ? Number(btn.dataset.line) : undefined;
+    if (source) vscode.postMessage({ type: "openModeDiagnostic", source, line });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=edit-mode]").forEach((btn) => btn.addEventListener("click", () => {
+    const slug = btn.dataset.slug;
+    if (slug) vscode.postMessage({ type: "openModeSource", slug });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=duplicate-mode]").forEach((btn) => btn.addEventListener("click", () => {
+    const slug = btn.dataset.slug;
+    if (slug) vscode.postMessage({ type: "duplicateMode", slug });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=delete-mode]").forEach((btn) => btn.addEventListener("click", () => {
+    const slug = btn.dataset.slug;
+    if (slug) vscode.postMessage({ type: "deleteMode", slug });
+  }));
+
+  document.querySelector<HTMLButtonElement>("[data-action=add-profile]")?.addEventListener("click", () => {
+    vscode.postMessage({ type: "addProvider" });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=activate-profile]").forEach((btn) => btn.addEventListener("click", () => {
+    const profileId = btn.dataset.profileId;
+    if (profileId) vscode.postMessage({ type: "activateProvider", profileId });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=set-api-key]").forEach((btn) => btn.addEventListener("click", () => {
+    const profileId = btn.dataset.profileId;
+    if (profileId) vscode.postMessage({ type: "setProviderApiKey", profileId });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=clear-api-key]").forEach((btn) => btn.addEventListener("click", () => {
+    const profileId = btn.dataset.profileId;
+    if (profileId) vscode.postMessage({ type: "clearProviderApiKey", profileId });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=test-connection]").forEach((btn) => btn.addEventListener("click", () => {
+    const profileId = btn.dataset.profileId;
+    if (profileId) {
+      providerTestResults[profileId] = { success: false, message: "Testing connection…", loading: true };
+      render();
+      vscode.postMessage({ type: "testProviderConnection", profileId });
+    }
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=fetch-models]").forEach((btn) => btn.addEventListener("click", () => {
+    const profileId = btn.dataset.profileId;
+    if (profileId) vscode.postMessage({ type: "fetchProviderModels", profileId });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=edit-profile]").forEach((btn) => btn.addEventListener("click", () => {
+    const profileId = btn.dataset.profileId;
+    if (profileId) vscode.postMessage({ type: "editProvider", profileId });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=delete-profile]").forEach((btn) => btn.addEventListener("click", () => {
+    const profileId = btn.dataset.profileId;
+    if (profileId) vscode.postMessage({ type: "deleteProvider", profileId });
+  }));
+
+  document.querySelector<HTMLSelectElement>("#settings-default-mode")?.addEventListener("change", (event) => {
+    const mode = (event.target as HTMLSelectElement).value;
+    vscode.postMessage({ type: "saveDefaultMode", mode });
+  });
+
+  document.querySelector<HTMLInputElement>("#settings-max-steps")?.addEventListener("change", (event) => {
+    const steps = Number((event.target as HTMLInputElement).value);
+    if (Number.isSafeInteger(steps) && steps >= 1 && steps <= 100) {
+      vscode.postMessage({ type: "saveMaxSteps", steps });
+    }
+  });
+
+  document.querySelector<HTMLButtonElement>("[data-action=open-advanced-settings]")?.addEventListener("click", () => {
+    vscode.postMessage({ type: "openAdvancedSettings" });
+  });
 }
 
 function sessionMenu(): string {

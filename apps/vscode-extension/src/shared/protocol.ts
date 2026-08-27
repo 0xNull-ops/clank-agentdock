@@ -42,7 +42,26 @@ export type UiToExtensionMessage =
   | { type: "openCheckpointDiff"; checkpointId: string; path?: string }
   | { type: "revertCheckpoint"; checkpointId: string }
   | { type: "removeContext"; refId: string }
-  | { type: "openSettings" };
+  | { type: "openSettings" }
+  | { type: "requestSettings" }
+  | { type: "activateProvider"; profileId: string }
+  | { type: "setProviderApiKey"; profileId: string }
+  | { type: "clearProviderApiKey"; profileId: string }
+  | { type: "testProviderConnection"; profileId: string }
+  | { type: "fetchProviderModels"; profileId: string }
+  | { type: "addProvider" }
+  | { type: "editProvider"; profileId: string }
+  | { type: "deleteProvider"; profileId: string }
+  | { type: "createMode" }
+  | { type: "importMode" }
+  | { type: "reloadModes" }
+  | { type: "openModeSource"; slug: string }
+  | { type: "duplicateMode"; slug: string }
+  | { type: "deleteMode"; slug: string }
+  | { type: "openModeDiagnostic"; source: string; line?: number }
+  | { type: "openAdvancedSettings" }
+  | { type: "saveDefaultMode"; mode: string }
+  | { type: "saveMaxSteps"; steps: number };
 
 export interface ContextRef {
   id: string;
@@ -69,6 +88,50 @@ export interface ModeOption {
   description: string;
   colorToken?: string;
   source?: "built-in" | "global" | "project";
+}
+
+export interface ProviderProfileView {
+  id: string;
+  name: string;
+  type: string;
+  baseUrl: string;
+  defaultModel?: string;
+  models: { id: string; displayName?: string }[];
+  isActive: boolean;
+  hasApiKey: boolean;
+}
+
+export interface ModeDetailView {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  scope: "built-in" | "project" | "global";
+  type: "primary" | "subagent" | "all";
+  model?: string;
+  modelPolicy?: "fixed" | "preferred" | "user-selectable";
+  steps?: number;
+  tools?: string[];
+  canManage: boolean;
+  colorToken?: string;
+}
+
+export interface CustomModeDiagnosticView {
+  message: string;
+  severity: "error" | "warning";
+  source?: string;
+  line?: number;
+}
+
+export interface HarnessSettingsState {
+  activeProfile?: ProviderProfileView;
+  profiles: ProviderProfileView[];
+  modes: ModeDetailView[];
+  diagnostics: CustomModeDiagnosticView[];
+  defaultMode: string;
+  defaultModel: string;
+  maxSteps: number;
+  workspaceName?: string;
 }
 
 /** UI-safe metadata for a recent workspace session. */
@@ -115,6 +178,8 @@ export type ExtensionToUiMessage =
   | { type: "checkpointReverted"; checkpointId: string; summary: CheckpointSummaryCard }
   | { type: "checkpointRevertConflict"; checkpointId: string; paths: string[]; message: string }
   | { type: "usageUpdated"; usage: UsageSnapshot }
+  | { type: "settingsState"; state: HarnessSettingsState }
+  | { type: "providerTestResult"; profileId: string; success: boolean; message: string }
   | { type: "error"; message: string; kind: "provider" | "tool" | "permission" | "workspace" | "unknown" };
 
 export interface ChatMessage {
