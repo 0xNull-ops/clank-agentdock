@@ -229,6 +229,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         });
         if (this.modeSelectionRequired) this.post({ type: "error", kind: "workspace", message: `Mode '${this.mode}' is unavailable. Select an installed mode before running.` });
         await this.postSessionList();
+        void this.ensureFreebuffSidecarRunningIfNeeded();
         void this.runtime.restoreRecentCheckpointCards();
         void this.runtime.refreshModels(false, this.customModes.get(this.mode)?.provider);
         return;
@@ -282,6 +283,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           });
           const skillIds = await this.setSelectedSkills(message.skillIds);
           const images = message.images?.map((img) => img.dataUrl);
+          await this.ensureFreebuffSidecarRunningIfNeeded();
           void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context, skillIds, images })
             .finally(() => this.postSessionList())
             .catch((error) => this.post({ type: "error", kind: "unknown", message: error instanceof Error ? error.message : String(error) }));
@@ -1424,6 +1426,28 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     }
     await this.refreshProviderSelection();
     void vscode.window.showInformationMessage(`${profile.name} is now active.`);
+  }
+
+  private async ensureFreebuffSidecarRunningIfNeeded(): Promise<void> {
+    try {
+      const definition = this.customModes.get(this.mode);
+      const profile = definition?.provider
+        ? await this.providerProfiles.getProfile(definition.provider)
+        : await this.providerProfiles.getActiveProfile();
+      if (!profile) return;
+      if (profile.id === "freebuff" || profile.id === "freebuff2api" || profile.baseUrl.includes("127.0.0.1:8080") || profile.baseUrl.includes("localhost:8080")) {
+        const isRunning = await this.freebuffSidecar.isRunning();
+        if (!isRunning) {
+          const detected = detectFreebuffCredentials();
+          const token = (await this.providerProfiles.getApiKey(profile.id)) || detected?.authToken || "";
+          if (token) {
+            await this.freebuffSidecar.start(token);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
 
   private async refreshProviderSelection(): Promise<void> {
