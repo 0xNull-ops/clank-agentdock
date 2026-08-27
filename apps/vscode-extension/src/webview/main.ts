@@ -67,6 +67,17 @@ let settingsQuery = "";
 let settingsState: HarnessSettingsState | undefined;
 const providerTestResults: Record<string, { success: boolean; message: string; loading?: boolean }> = {};
 
+type TimelineItem =
+  | { kind: "user_message"; id: string; text: string; createdAt: number }
+  | { kind: "assistant_message"; id: string; text: string; createdAt: number; isStreaming?: boolean }
+  | { kind: "system_message"; id: string; text: string; createdAt: number }
+  | { kind: "tool"; id: string; tool: ToolActivity }
+  | { kind: "subagent"; id: string; subagent: SubagentActivity }
+  | { kind: "plan"; id: string; plan: PlanView }
+  | { kind: "checkpoint"; id: string; checkpoint: CheckpointSummaryCard }
+  | { kind: "approval"; id: string; approval: ToolApproval };
+
+let timeline: TimelineItem[] = [];
 let modes: ModeOption[] = [...BUILT_IN_MODES];
 let models: ModelOption[] = [
   { id: "openai-compatible", label: "Configure model…", hint: "OpenAI-compatible endpoint" }
@@ -82,9 +93,6 @@ let activeModel = "openai-compatible";
 let modelPolicy: ModelPolicyView = { policy: "user-selectable" };
 let runState: "idle" | "running" | "awaiting_approval" | "complete" | "cancelled" | "error" = "idle";
 let contextRefs: ContextRef[] = [];
-let messages: ChatMessage[] = [];
-let tools: ToolActivity[] = [];
-let subagents: SubagentActivity[] = [];
 let approval: ToolApproval | undefined;
 let plan: PlanView | undefined;
 let checkpoints: CheckpointSummaryCard[] = [];
@@ -109,16 +117,16 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       modelPolicy = message.modelPolicy;
       if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
       models = message.models;
-      messages = message.messages;
-      tools = message.tools;
-      subagents = message.subagents;
       plan = message.plan;
       contextRefs = [];
+      rebuildTimeline(message.messages, message.tools, message.subagents, message.plan);
+      render();
       break;
     case "sessionList":
       sessions = message.sessions;
       activeSessionId = message.activeSessionId;
       historyBusy = false;
+      updateSessionPicker();
       break;
     case "sessionOpened":
       activeSessionId = message.session.id;
@@ -127,9 +135,6 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       activeModel = message.session.modelId;
       modelPolicy = message.modelPolicy;
       if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
-      messages = message.messages;
-      tools = message.tools;
-      subagents = message.subagents;
       plan = message.plan;
       checkpoints = [];
       checkpointConflict = undefined;
@@ -138,61 +143,74 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       historyOpen = false;
       runState = "idle";
       contextRefs = [];
+      rebuildTimeline(message.messages, message.tools, message.subagents, message.plan);
+      render();
       break;
     case "contextAdded":
       contextRefs = [...contextRefs.filter((ref) => ref.id !== message.ref.id), message.ref];
+      updateContextChips();
       break;
     case "modeChanged":
       activeMode = message.mode;
+      updateControlStrip();
       break;
     case "modesChanged":
       modes = message.modes;
+      updateControlStrip();
       break;
     case "modelChanged":
       activeModel = message.modelId;
+      updateControlStrip();
       break;
     case "modelPolicyChanged":
       modelPolicy = message.modelPolicy;
       if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
+      updateControlStrip();
       break;
     case "modelsChanged":
       models = message.models;
+      updateControlStrip();
       break;
     case "runState":
       runState = message.state;
       if (message.state !== "awaiting_approval") approval = undefined;
+      updateRunStateUi();
       break;
     case "assistantMessage":
-      messages = [...messages, message.message];
+      onAssistantMessage(message.message);
       break;
     case "toolCall":
-      tools = [...tools.filter((tool) => tool.id !== message.tool.id), message.tool];
+      onToolCall(message.tool);
       break;
     case "subagentUpdate":
-      subagents = [...subagents.filter((item) => item.id !== message.subagent.id), message.subagent];
+      onSubagentUpdate(message.subagent);
       break;
     case "approvalRequired":
       approval = message.approval;
       runState = "awaiting_approval";
+      onApprovalRequired(message.approval);
       break;
     case "planChanged":
       plan = message.plan;
+      onPlanChanged(message.plan);
       break;
     case "checkpointSummary":
-      checkpoints = [...checkpoints.filter((checkpoint) => checkpoint.id !== message.checkpoint.id), message.checkpoint];
+      checkpoints = [...checkpoints.filter((c) => c.id !== message.checkpoint.id), message.checkpoint];
       checkpointConflict = undefined;
+      onCheckpointSummary(message.checkpoint);
       break;
     case "checkpointReverted":
-      checkpoints = checkpoints.filter((checkpoint) => checkpoint.id !== message.checkpointId);
+      checkpoints = checkpoints.filter((c) => c.id !== message.checkpointId);
       checkpointConflict = undefined;
-      messages = [...messages, { id: `checkpoint-${Date.now()}`, role: "system", text: `Reverted ${message.summary.filesChanged} file${message.summary.filesChanged === 1 ? "" : "s"} from the agent checkpoint.`, createdAt: Date.now() }];
+      appendSystemMessage(`Reverted ${message.summary.filesChanged} file${message.summary.filesChanged === 1 ? "" : "s"} from the agent checkpoint.`);
       break;
     case "checkpointRevertConflict":
       checkpointConflict = message;
-      messages = [...messages, { id: `checkpoint-conflict-${Date.now()}`, role: "system", text: `${message.message} Affected paths: ${message.paths.slice(0, 5).join(", ")}${message.paths.length > 5 ? "…" : ""}`, createdAt: Date.now() }];
+      appendSystemMessage(`${message.message} Affected paths: ${message.paths.slice(0, 5).join(", ")}${message.paths.length > 5 ? "…" : ""}`);
       break;
     case "settingsState":
       settingsState = message.state;
+      if (currentView === "settings") renderSettings();
       break;
     case "providerTestResult":
       providerTestResults[message.profileId] = {
@@ -200,11 +218,13 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
         message: message.message,
         loading: false,
       };
+      if (currentView === "settings") renderSettings();
       break;
     case "error":
       historyBusy = false;
-      messages = [...messages, { id: `error-${Date.now()}`, role: "system", text: message.message, createdAt: Date.now() }];
+      appendSystemMessage(message.message);
       runState = "error";
+      updateRunStateUi();
       break;
     case "usageUpdated":
       break;
@@ -212,7 +232,6 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       appendStreamingText(message.text);
       break;
   }
-  render();
 });
 
 window.addEventListener("keydown", (event) => {
@@ -221,6 +240,28 @@ window.addEventListener("keydown", (event) => {
     render();
   }
 });
+
+function rebuildTimeline(restoredMessages: ChatMessage[], restoredTools: ToolActivity[], restoredSubagents: SubagentActivity[], restoredPlan?: PlanView): void {
+  timeline = [];
+  for (const msg of restoredMessages) {
+    if (msg.role === "user") {
+      timeline.push({ kind: "user_message", id: msg.id, text: msg.text, createdAt: msg.createdAt });
+    } else if (msg.role === "assistant") {
+      timeline.push({ kind: "assistant_message", id: msg.id, text: msg.text, createdAt: msg.createdAt });
+    } else {
+      timeline.push({ kind: "system_message", id: msg.id, text: msg.text, createdAt: msg.createdAt });
+    }
+  }
+  for (const tool of restoredTools) {
+    timeline.push({ kind: "tool", id: tool.id, tool });
+  }
+  for (const sub of restoredSubagents) {
+    timeline.push({ kind: "subagent", id: sub.id, subagent: sub });
+  }
+  if (restoredPlan) {
+    timeline.push({ kind: "plan", id: restoredPlan.id, plan: restoredPlan });
+  }
+}
 
 function render(): void {
   if (currentView === "settings") {
@@ -235,36 +276,506 @@ function render(): void {
 function renderChat(): void {
   const mode = modes.find((item) => item.id === activeMode) ?? modes[0];
   const visibleModels = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
+  
+  const workingIndicatorHtml = runState === "running"
+    ? `<div class="agent-working-indicator" id="agent-working-indicator"><span class="working-spinner">✦</span><span class="working-text">Agent is working…</span></div>`
+    : runState === "awaiting_approval"
+      ? `<div class="agent-working-indicator waiting" id="agent-working-indicator"><span class="working-spinner">!</span><span class="working-text">Waiting for approval…</span></div>`
+      : "";
+
+  const transcriptContent = timeline.length === 0
+    ? emptyState(mode.label)
+    : timeline.map(renderTimelineItem).join("") + workingIndicatorHtml;
+
   appRoot.innerHTML = `
-    <section class="shell">
+    <section class="shell" id="chat-shell">
       <header class="header">
         <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><div><p class="eyebrow">FORGE / LOCAL HARNESS</p><h1>Agent chat</h1></div></div>
         <div class="header-actions">
-          <button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}"><span class="session-picker-icon">◷</span><span class="session-picker-label">${escapeHtml(activeSessionTitle())}</span><span class="session-picker-chevron">⌄</span></button>
+          <button class="session-picker ${historyOpen ? "open" : ""}" data-action="history" aria-label="Open recent sessions" aria-haspopup="menu" aria-expanded="${historyOpen}"><span class="session-picker-icon">◷</span><span class="session-picker-label" id="session-picker-label">${escapeHtml(activeSessionTitle())}</span><span class="session-picker-chevron">⌄</span></button>
           <button class="icon-button" data-action="open-settings" aria-label="Open Agent Harness settings" title="Extension Settings">⚙</button>
         </div>
       </header>
-      ${historyOpen ? sessionMenu() : ""}
-      <div class="control-strip">
-        <label class="select-wrap mode-select" title="${escapeHtml(`${mode.description} · ${mode.source ?? "unavailable"}`)}"><span class="mode-dot mode-${safeCssToken(mode.id)}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("")}</select><span class="chevron">⌄</span></label>
-        <label class="select-wrap model-select ${modelPolicy.policy}" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}"><span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span><span class="sr-only">Model</span><select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span></label>
+      <div id="session-menu-container">${historyOpen ? sessionMenu() : ""}</div>
+      <div class="control-strip" id="control-strip">
+        <label class="select-wrap mode-select" id="mode-select-wrap" title="${escapeHtml(`${mode.description} · ${mode.source ?? "unavailable"}`)}"><span class="mode-dot mode-${safeCssToken(mode.id)}"></span><span class="sr-only">Mode</span><select id="mode-select">${modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("")}</select><span class="chevron">⌄</span></label>
+        <label class="select-wrap model-select ${modelPolicy.policy}" id="model-select-wrap" title="${escapeHtml(modelPolicy.reason ?? `${modelPolicy.policy} model policy`)}"><span class="model-glyph">${modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈"}</span><span class="sr-only">Model</span><select id="model-select" ${modelPolicy.policy === "fixed" ? "disabled" : ""}>${visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select><span class="chevron">${modelPolicy.policy === "fixed" ? "fixed" : "⌄"}</span></label>
       </div>
-      <div class="status-row"><span class="status-dot ${runState === "running" ? "pulse" : ""}"></span><span>${statusLabel()}</span><span class="status-spacer"></span><span class="context-label">Context <strong>12%</strong></span><span class="context-track"><span style="width:12%"></span></span></div>
       <div class="rule"></div>
-      <section class="transcript" id="transcript" aria-live="polite">
-        ${messages.length === 0 && tools.length === 0 && subagents.length === 0 && checkpoints.length === 0 && !plan ? emptyState(mode.label) : `${messages.map(messageCard).join("")}${plan ? planCard(plan) : ""}${subagents.map(subagentCard).join("")}${tools.map(toolCard).join("")}${checkpoints.map(checkpointCard).join("")}${approval ? approvalCard(approval) : ""}`}
-      </section>
+      <section class="transcript" id="transcript" aria-live="polite">${transcriptContent}</section>
       <footer class="composer-wrap">
-        ${contextRefs.length ? `<div class="context-chips">${contextRefs.map(contextChip).join("")}</div>` : ""}
+        <div class="context-chips" id="context-chips">${contextRefs.map(contextChip).join("")}</div>
         <form class="composer" id="composer-form">
           <textarea id="composer-input" rows="3" placeholder="Ask ${mode.label.toLowerCase()} anything…" aria-label="Message Agent Harness"></textarea>
-          <div class="composer-actions"><button type="button" class="quiet-button" data-action="attach" aria-label="Attach context">＋ context</button><span class="composer-hint">⌘ ↵ to send</span>${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="quiet-button cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}</div>
+          <div class="composer-actions" id="composer-actions">
+            <button type="button" class="quiet-button" data-action="attach" aria-label="Attach context">＋ context</button>
+            <span class="composer-hint">⌘ ↵ to send</span>
+            ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="quiet-button cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
+          </div>
         </form>
         <div class="composer-meta"><span><span class="live-dot"></span> local session</span><button type="button" class="text-button" data-action="new">new session</button></div>
       </footer>
     </section>`;
+
   const transcript = document.querySelector<HTMLElement>("#transcript");
   if (transcript) transcript.scrollTop = transcript.scrollHeight;
+}
+
+function updateControlStrip(): void {
+  const mode = modes.find((item) => item.id === activeMode) ?? modes[0];
+  const modeSelect = document.querySelector<HTMLSelectElement>("#mode-select");
+  if (modeSelect) {
+    modeSelect.innerHTML = modes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeMode ? "selected" : ""}>${escapeHtml(`${item.label} · ${item.source ?? "unavailable"}`)}</option>`).join("");
+    const wrap = document.querySelector<HTMLElement>("#mode-select-wrap");
+    if (wrap) {
+      wrap.title = `${mode.description} · ${mode.source ?? "unavailable"}`;
+      const dot = wrap.querySelector(".mode-dot");
+      if (dot) dot.className = `mode-dot mode-${safeCssToken(mode.id)}`;
+    }
+  }
+
+  const visibleModels = models.some((item) => item.id === activeModel) ? models : [...models, { id: activeModel, label: activeModel, hint: "configured" }];
+  const modelSelect = document.querySelector<HTMLSelectElement>("#model-select");
+  if (modelSelect) {
+    modelSelect.disabled = modelPolicy.policy === "fixed";
+    modelSelect.innerHTML = visibleModels.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === activeModel ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+    const wrap = document.querySelector<HTMLElement>("#model-select-wrap");
+    if (wrap) {
+      wrap.className = `select-wrap model-select ${modelPolicy.policy}`;
+      wrap.title = modelPolicy.reason ?? `${modelPolicy.policy} model policy`;
+      const glyph = wrap.querySelector(".model-glyph");
+      if (glyph) glyph.textContent = modelPolicy.policy === "fixed" ? "▣" : modelPolicy.policy === "preferred" ? "◇" : "◈";
+      const chevron = wrap.querySelector(".chevron");
+      if (chevron) chevron.textContent = modelPolicy.policy === "fixed" ? "fixed" : "⌄";
+    }
+  }
+
+  const composerInput = document.querySelector<HTMLTextAreaElement>("#composer-input");
+  if (composerInput && !composerInput.value) {
+    composerInput.placeholder = `Ask ${mode.label.toLowerCase()} anything…`;
+  }
+}
+
+function updateSessionPicker(): void {
+  const label = document.querySelector<HTMLElement>("#session-picker-label");
+  if (label) label.textContent = activeSessionTitle();
+  const menuContainer = document.querySelector<HTMLElement>("#session-menu-container");
+  if (menuContainer) menuContainer.innerHTML = historyOpen ? sessionMenu() : "";
+}
+
+function updateContextChips(): void {
+  const container = document.querySelector<HTMLElement>("#context-chips");
+  if (container) container.innerHTML = contextRefs.map(contextChip).join("");
+}
+
+function updateRunStateUi(): void {
+  const actions = document.querySelector<HTMLElement>("#composer-actions");
+  if (actions) {
+    actions.innerHTML = `
+      <button type="button" class="quiet-button" data-action="attach" aria-label="Attach context">＋ context</button>
+      <span class="composer-hint">⌘ ↵ to send</span>
+      ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="quiet-button cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
+    `;
+    actions.querySelector("[data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
+    actions.querySelector("[data-action=attach]")?.addEventListener("click", () => vscode.postMessage({ type: "pickContext" }));
+  }
+
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  let workingEl = document.querySelector<HTMLElement>("#agent-working-indicator");
+
+  if (runState === "running") {
+    if (!workingEl && transcript) {
+      workingEl = document.createElement("div");
+      workingEl.className = "agent-working-indicator";
+      workingEl.id = "agent-working-indicator";
+      workingEl.innerHTML = `<span class="working-spinner">✦</span><span class="working-text">Agent is working…</span>`;
+      transcript.appendChild(workingEl);
+      scrollToBottom();
+    } else if (workingEl) {
+      workingEl.className = "agent-working-indicator";
+      workingEl.innerHTML = `<span class="working-spinner">✦</span><span class="working-text">Agent is working…</span>`;
+    }
+  } else if (runState === "awaiting_approval") {
+    if (!workingEl && transcript) {
+      workingEl = document.createElement("div");
+      workingEl.className = "agent-working-indicator waiting";
+      workingEl.id = "agent-working-indicator";
+      workingEl.innerHTML = `<span class="working-spinner">!</span><span class="working-text">Waiting for approval…</span>`;
+      transcript.appendChild(workingEl);
+      scrollToBottom();
+    } else if (workingEl) {
+      workingEl.className = "agent-working-indicator waiting";
+      workingEl.innerHTML = `<span class="working-spinner">!</span><span class="working-text">Waiting for approval…</span>`;
+    }
+  } else {
+    if (workingEl) workingEl.remove();
+    // Finalize any streaming messages
+    for (const item of timeline) {
+      if (item.kind === "assistant_message" && item.isStreaming) {
+        item.isStreaming = false;
+        const msgEl = document.querySelector<HTMLElement>(`#msg-${item.id} .message-body`);
+        if (msgEl) msgEl.innerHTML = formatMarkdown(item.text);
+      }
+    }
+  }
+}
+
+function renderTranscript(): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+
+  const mode = modes.find((item) => item.id === activeMode) ?? modes[0];
+  if (timeline.length === 0) {
+    transcript.innerHTML = emptyState(mode.label);
+    transcript.querySelectorAll<HTMLButtonElement>("[data-prompt]").forEach((button) => button.addEventListener("click", () => {
+      const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
+      if (input) { input.value = button.dataset.prompt ?? ""; input.focus(); }
+    }));
+    return;
+  }
+
+  const workingIndicatorHtml = runState === "running"
+    ? `<div class="agent-working-indicator" id="agent-working-indicator"><span class="working-spinner">✦</span><span class="working-text">Agent is working…</span></div>`
+    : runState === "awaiting_approval"
+      ? `<div class="agent-working-indicator waiting" id="agent-working-indicator"><span class="working-spinner">!</span><span class="working-text">Waiting for approval…</span></div>`
+      : "";
+
+  transcript.innerHTML = timeline.map(renderTimelineItem).join("") + workingIndicatorHtml;
+  scrollToBottom();
+}
+
+function renderTimelineItem(item: TimelineItem): string {
+  switch (item.kind) {
+    case "user_message":
+      return `<article class="message user" id="msg-${item.id}"><div class="message-label">YOU</div><div class="message-body">${formatMarkdown(item.text)}</div></article>`;
+    case "assistant_message":
+      return `<article class="message assistant" id="msg-${item.id}"><div class="message-label">AGENT</div><div class="message-body">${formatMarkdown(item.text)}${item.isStreaming ? '<span class="streaming-cursor"></span>' : ''}</div></article>`;
+    case "system_message":
+      return `<article class="message system" id="msg-${item.id}"><div class="message-label">SYSTEM</div><div class="message-body">${formatMarkdown(item.text)}</div></article>`;
+    case "tool":
+      return toolCard(item.tool);
+    case "subagent":
+      return subagentCard(item.subagent);
+    case "plan":
+      return planCard(item.plan);
+    case "checkpoint":
+      return checkpointCard(item.checkpoint);
+    case "approval":
+      return approvalCard(item.approval);
+  }
+}
+
+function appendStreamingText(text: string): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) {
+    render();
+    return;
+  }
+
+  // Remove empty state if present
+  const empty = transcript.querySelector(".empty-state");
+  if (empty) empty.remove();
+
+  const lastItem = timeline[timeline.length - 1];
+  if (lastItem && lastItem.kind === "assistant_message" && lastItem.isStreaming) {
+    lastItem.text += text;
+    const bodyEl = document.querySelector<HTMLElement>(`#msg-${lastItem.id} .message-body`);
+    if (bodyEl) {
+      bodyEl.innerHTML = formatMarkdown(lastItem.text) + '<span class="streaming-cursor"></span>';
+      scrollToBottom();
+      return;
+    }
+  }
+
+  // Finalize preceding assistant message if any
+  if (lastItem && lastItem.kind === "assistant_message" && lastItem.isStreaming) {
+    lastItem.isStreaming = false;
+  }
+
+  const id = `assistant-${Date.now()}`;
+  const newItem: TimelineItem = { kind: "assistant_message", id, text, createdAt: Date.now(), isStreaming: true };
+  timeline.push(newItem);
+
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = renderTimelineItem(newItem);
+  const cardNode = wrapper.firstElementChild;
+  if (cardNode) {
+    const workingEl = document.querySelector("#agent-working-indicator");
+    if (workingEl) {
+      transcript.insertBefore(cardNode, workingEl);
+    } else {
+      transcript.appendChild(cardNode);
+    }
+  }
+  scrollToBottom();
+}
+
+function onToolCall(tool: ToolActivity): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+
+  const empty = transcript.querySelector(".empty-state");
+  if (empty) empty.remove();
+
+  const existing = timeline.find((item) => item.kind === "tool" && item.id === tool.id);
+  if (existing && existing.kind === "tool") {
+    existing.tool = tool;
+    const existingEl = document.querySelector<HTMLElement>(`#tool-${safeCssToken(tool.id)}`);
+    if (existingEl) {
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = toolCard(tool);
+      if (wrapper.firstElementChild) {
+        existingEl.replaceWith(wrapper.firstElementChild);
+      }
+      return;
+    }
+  }
+
+  // Finalize any in-flight streaming text before this tool
+  const lastItem = timeline[timeline.length - 1];
+  if (lastItem && lastItem.kind === "assistant_message" && lastItem.isStreaming) {
+    lastItem.isStreaming = false;
+    const bodyEl = document.querySelector<HTMLElement>(`#msg-${lastItem.id} .message-body`);
+    if (bodyEl) bodyEl.innerHTML = formatMarkdown(lastItem.text);
+  }
+
+  const newItem: TimelineItem = { kind: "tool", id: tool.id, tool };
+  timeline.push(newItem);
+
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = toolCard(tool);
+  const cardNode = wrapper.firstElementChild;
+  if (cardNode) {
+    const workingEl = document.querySelector("#agent-working-indicator");
+    if (workingEl) {
+      transcript.insertBefore(cardNode, workingEl);
+    } else {
+      transcript.appendChild(cardNode);
+    }
+  }
+  scrollToBottom();
+}
+
+function onAssistantMessage(msg: ChatMessage): void {
+  const lastItem = timeline[timeline.length - 1];
+  if (lastItem && lastItem.kind === "assistant_message" && lastItem.isStreaming) {
+    lastItem.isStreaming = false;
+    lastItem.text = msg.text;
+    const bodyEl = document.querySelector<HTMLElement>(`#msg-${lastItem.id} .message-body`);
+    if (bodyEl) bodyEl.innerHTML = formatMarkdown(lastItem.text);
+    return;
+  }
+
+  const newItem: TimelineItem = { kind: "assistant_message", id: msg.id, text: msg.text, createdAt: msg.createdAt };
+  timeline.push(newItem);
+
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = renderTimelineItem(newItem);
+  const cardNode = wrapper.firstElementChild;
+  if (cardNode) {
+    const workingEl = document.querySelector("#agent-working-indicator");
+    if (workingEl) {
+      transcript.insertBefore(cardNode, workingEl);
+    } else {
+      transcript.appendChild(cardNode);
+    }
+  }
+  scrollToBottom();
+}
+
+function onSubagentUpdate(subagent: SubagentActivity): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+
+  const existing = timeline.find((item) => item.kind === "subagent" && item.id === subagent.id);
+  if (existing && existing.kind === "subagent") {
+    existing.subagent = subagent;
+    const existingEl = document.querySelector<HTMLElement>(`#subagent-${safeCssToken(subagent.id)}`);
+    if (existingEl) {
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = subagentCard(subagent);
+      if (wrapper.firstElementChild) existingEl.replaceWith(wrapper.firstElementChild);
+      return;
+    }
+  }
+
+  const newItem: TimelineItem = { kind: "subagent", id: subagent.id, subagent };
+  timeline.push(newItem);
+
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = subagentCard(subagent);
+  const cardNode = wrapper.firstElementChild;
+  if (cardNode) {
+    const workingEl = document.querySelector("#agent-working-indicator");
+    if (workingEl) {
+      transcript.insertBefore(cardNode, workingEl);
+    } else {
+      transcript.appendChild(cardNode);
+    }
+  }
+  scrollToBottom();
+}
+
+function onPlanChanged(newPlan?: PlanView): void {
+  if (!newPlan) return;
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+
+  const existing = timeline.find((item) => item.kind === "plan" && item.id === newPlan.id);
+  if (existing && existing.kind === "plan") {
+    existing.plan = newPlan;
+    const existingEl = document.querySelector<HTMLElement>(`#plan-${safeCssToken(newPlan.id)}`);
+    if (existingEl) {
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = planCard(newPlan);
+      if (wrapper.firstElementChild) existingEl.replaceWith(wrapper.firstElementChild);
+      return;
+    }
+  }
+
+  const newItem: TimelineItem = { kind: "plan", id: newPlan.id, plan: newPlan };
+  timeline.push(newItem);
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = planCard(newPlan);
+  const cardNode = wrapper.firstElementChild;
+  if (cardNode) {
+    const workingEl = document.querySelector("#agent-working-indicator");
+    if (workingEl) {
+      transcript.insertBefore(cardNode, workingEl);
+    } else {
+      transcript.appendChild(cardNode);
+    }
+  }
+  scrollToBottom();
+}
+
+function onCheckpointSummary(cp: CheckpointSummaryCard): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+
+  const newItem: TimelineItem = { kind: "checkpoint", id: cp.id, checkpoint: cp };
+  timeline.push(newItem);
+
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = checkpointCard(cp);
+  const cardNode = wrapper.firstElementChild;
+  if (cardNode) {
+    const workingEl = document.querySelector("#agent-working-indicator");
+    if (workingEl) {
+      transcript.insertBefore(cardNode, workingEl);
+    } else {
+      transcript.appendChild(cardNode);
+    }
+  }
+  scrollToBottom();
+}
+
+function onApprovalRequired(app: ToolApproval): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+
+  const newItem: TimelineItem = { kind: "approval", id: app.id, approval: app };
+  timeline.push(newItem);
+
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = approvalCard(app);
+  const cardNode = wrapper.firstElementChild;
+  if (cardNode) {
+    const workingEl = document.querySelector("#agent-working-indicator");
+    if (workingEl) {
+      transcript.insertBefore(cardNode, workingEl);
+    } else {
+      transcript.appendChild(cardNode);
+    }
+  }
+  scrollToBottom();
+}
+
+function appendSystemMessage(text: string): void {
+  const id = `sys-${Date.now()}`;
+  const newItem: TimelineItem = { kind: "system_message", id, text, createdAt: Date.now() };
+  timeline.push(newItem);
+
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (!transcript) return;
+
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = renderTimelineItem(newItem);
+  const cardNode = wrapper.firstElementChild;
+  if (cardNode) {
+    const workingEl = document.querySelector("#agent-working-indicator");
+    if (workingEl) {
+      transcript.insertBefore(cardNode, workingEl);
+    } else {
+      transcript.appendChild(cardNode);
+    }
+  }
+  scrollToBottom();
+}
+
+function scrollToBottom(): void {
+  const transcript = document.querySelector<HTMLElement>("#transcript");
+  if (transcript) {
+    transcript.scrollTop = transcript.scrollHeight;
+  }
+}
+
+function formatMarkdown(text: string): string {
+  if (!text) return "";
+
+  // 1. Preserve code blocks
+  const codeBlocks: string[] = [];
+  let processed = text.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_match, lang, code) => {
+    const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
+    const escapedCode = escapeHtml(code.trimEnd());
+    const langLabel = lang ? `<span class="code-lang">${escapeHtml(lang)}</span>` : "";
+    codeBlocks.push(`<div class="code-block-wrap">${langLabel}<pre><code>${escapedCode}</code></pre></div>`);
+    return placeholder;
+  });
+
+  // 2. Escape HTML
+  processed = escapeHtml(processed);
+
+  // 3. Inline code
+  processed = processed.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
+
+  // 4. Bold & Italics
+  processed = processed.replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>");
+  processed = processed.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  processed = processed.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  processed = processed.replace(/___([^_]+)___/g, "<strong><em>$1</em></strong>");
+  processed = processed.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  processed = processed.replace(/_([^_]+)_/g, "<em>$1</em>");
+
+  // 5. Headings
+  processed = processed.replace(/^### (.*$)/gim, "<h4>$1</h4>");
+  processed = processed.replace(/^## (.*$)/gim, "<h3>$1</h3>");
+  processed = processed.replace(/^# (.*$)/gim, "<h2>$1</h2>");
+
+  // 6. Blockquotes
+  processed = processed.replace(/^&gt; (.*$)/gim, "<blockquote>$1</blockquote>");
+
+  // 7. Bullet lists
+  processed = processed.replace(/^[\*\-\+] (.*$)/gim, "<li>$1</li>");
+  processed = processed.replace(/(<li>.*<\/li>)/gms, "<ul>$1</ul>");
+  processed = processed.replace(/<\/ul>\s*<ul>/g, "");
+
+  // 8. Paragraphs
+  processed = processed.replace(/\n\n+/g, "</p><p>");
+  processed = processed.replace(/\n/g, "<br>");
+  processed = `<p>${processed}</p>`;
+
+  // 9. Restore code blocks
+  codeBlocks.forEach((block, idx) => {
+    processed = processed.replace(`<p>__CODE_BLOCK_${idx}__</p>`, block);
+    processed = processed.replace(`__CODE_BLOCK_${idx}__`, block);
+  });
+
+  // Clean empty paragraphs
+  processed = processed.replace(/<p>\s*<\/p>/g, "");
+  return processed;
 }
 
 function renderSettings(): void {
@@ -713,20 +1224,24 @@ function wireChatInteractions(): void {
   document.querySelector<HTMLSelectElement>("#mode-select")?.addEventListener("change", (event) => {
     activeMode = (event.target as HTMLSelectElement).value as AgentMode;
     vscode.postMessage({ type: "changeMode", mode: activeMode });
+    updateControlStrip();
   });
   document.querySelector<HTMLSelectElement>("#model-select")?.addEventListener("change", (event) => {
     activeModel = (event.target as HTMLSelectElement).value;
     vscode.postMessage({ type: "changeModel", modelId: activeModel });
+    updateControlStrip();
   });
   document.querySelector<HTMLFormElement>("#composer-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const input = document.querySelector<HTMLTextAreaElement>("#composer-input");
     if (!input?.value.trim()) return;
     const text = input.value.trim();
-    messages = [...messages, { id: `user-${Date.now()}`, role: "user", text, createdAt: Date.now() }];
+    timeline.push({ kind: "user_message", id: `user-${Date.now()}`, text, createdAt: Date.now() });
+    runState = "running";
     vscode.postMessage({ type: "sendMessage", text, mode: activeMode, modelId: activeModel, context: contextRefs });
     input.value = "";
-    render();
+    renderTranscript();
+    updateRunStateUi();
   });
   document.querySelector<HTMLTextAreaElement>("#composer-input")?.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -747,7 +1262,10 @@ function wireChatInteractions(): void {
     vscode.postMessage({ type: "requestSettings" });
     render();
   });
-  document.querySelector<HTMLButtonElement>("[data-action=history]")?.addEventListener("click", () => { historyOpen = !historyOpen; render(); });
+  document.querySelector<HTMLButtonElement>("[data-action=history]")?.addEventListener("click", () => {
+    historyOpen = !historyOpen;
+    updateSessionPicker();
+  });
   document.querySelector<HTMLButtonElement>("[data-action=refresh-sessions]")?.addEventListener("click", () => {
     vscode.postMessage({ type: "listSessions" });
   });
@@ -763,7 +1281,7 @@ function wireChatInteractions(): void {
     if (!sessionId || historyBusy) return;
     historyBusy = true;
     historyOpen = false;
-    render();
+    updateSessionPicker();
     vscode.postMessage({ type: "openSession", sessionId });
   }));
   document.querySelectorAll<HTMLButtonElement>("[data-session-action]").forEach((button) => button.addEventListener("click", () => {
@@ -797,12 +1315,23 @@ function wireChatInteractions(): void {
     if (!refId) return;
     contextRefs = contextRefs.filter((ref) => ref.id !== refId);
     vscode.postMessage({ type: "removeContext", refId });
-    render();
+    updateContextChips();
   }));
   document.querySelector<HTMLButtonElement>("[data-action=attach]")?.addEventListener("click", () => {
     vscode.postMessage({ type: "pickContext" });
   });
-  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => { messages = []; tools = []; subagents = []; checkpoints = []; checkpointConflict = undefined; approval = undefined; plan = undefined; runState = "idle"; historyOpen = false; vscode.postMessage({ type: "newSession" }); render(); });
+  document.querySelector<HTMLButtonElement>("[data-action=new]")?.addEventListener("click", () => {
+    timeline = [];
+    checkpoints = [];
+    checkpointConflict = undefined;
+    approval = undefined;
+    plan = undefined;
+    runState = "idle";
+    historyOpen = false;
+    vscode.postMessage({ type: "newSession" });
+    renderTranscript();
+    updateRunStateUi();
+  });
   for (const action of ["approve", "revise", "save", "discard"] as const) {
     document.querySelector<HTMLButtonElement>(`[data-action=plan-${action}]`)?.addEventListener("click", () => {
       if (!plan) return;
@@ -1097,16 +1626,6 @@ function activeSessionTitle(): string {
 function formatSessionDate(value: number): string {
   if (!Number.isFinite(value)) return "";
   return new Date(value).toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-function appendStreamingText(text: string): void {
-  const last = messages[messages.length - 1];
-  if (last?.role === "assistant") messages = [...messages.slice(0, -1), { ...last, text: last.text + text }];
-  else messages = [...messages, { id: `assistant-${Date.now()}`, role: "assistant", text, createdAt: Date.now() }];
-}
-
-function statusLabel(): string {
-  return runState === "running" ? "Agent is working" : runState === "awaiting_approval" ? "Waiting for approval" : runState === "error" ? "Run needs attention" : "Ready when you are";
 }
 
 function escapeHtml(value: string): string {
