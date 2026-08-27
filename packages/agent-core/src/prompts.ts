@@ -1,4 +1,5 @@
 import type { ModeDefinition, PlanContract, PlanRecord, PlanStatus } from "./types";
+import type { SkillOption } from "./skill-registry";
 
 export interface InstructionSource {
   source: string;
@@ -9,6 +10,7 @@ export interface PromptComposition {
   mode: ModeDefinition;
   workspaceInstructions?: InstructionSource[];
   userInstructions?: InstructionSource[];
+  availableSkills?: readonly SkillOption[];
   skills?: InstructionSource[];
   defaultContext?: InstructionSource[];
   architectureContract?: string;
@@ -172,6 +174,8 @@ export function composeSystemPrompt(input: PromptComposition): string {
   if (workspace) sections.push(section("Workspace instructions", workspace));
   const user = formatSources(input.userInstructions);
   if (user) sections.push(section("User instructions", user));
+  const availableSkills = formatAvailableSkills(input.availableSkills);
+  if (availableSkills) sections.push(section("Available skills", availableSkills));
   const skills = formatSources(input.skills);
   if (skills) sections.push(section("Active skills", skills));
   const defaultContext = formatSources(input.defaultContext);
@@ -183,6 +187,11 @@ export function composeSystemPrompt(input: PromptComposition): string {
   if (input.mode.defaultContextSources?.length) sections.push(section("Default context policy", `Load and consider these host-provided context sources when available: ${input.mode.defaultContextSources.join(", ")}.`));
   if (input.mode.responseTemplate?.trim()) sections.push(section("Response template", input.mode.responseTemplate.trim()));
   return sections.join("\n\n");
+}
+
+function formatAvailableSkills(skills: readonly SkillOption[] | undefined): string {
+  const lines = (skills ?? []).slice(0, 100).map((skill) => `- ${skill.id}: ${skill.description.replace(/\s+/g, " ").trim().slice(0, 300)}`);
+  return lines.join("\n").slice(0, 16_000);
 }
 
 function section(title: string, content: string): string {

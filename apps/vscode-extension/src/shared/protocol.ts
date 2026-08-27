@@ -21,7 +21,8 @@ export type RunState = "idle" | "running" | "awaiting_approval" | "cancelled" | 
 
 export type UiToExtensionMessage =
   | { type: "ready" }
-  | { type: "sendMessage"; text: string; mode: AgentMode; modelId: string; context: ContextRef[] }
+  | { type: "sendMessage"; text: string; mode: AgentMode; modelId: string; context: ContextRef[]; skillIds: string[] }
+  | { type: "changeSkills"; skillIds: string[] }
   | { type: "cancelRun" }
   | { type: "newSession" }
   | { type: "listSessions" }
@@ -106,6 +107,14 @@ export interface ModelPolicyView {
   reason?: string;
 }
 
+export interface SkillOptionView {
+  id: string;
+  name: string;
+  description: string;
+  scope: "project" | "global" | "installed";
+  sourceKind: "native" | "compatibility" | "installed";
+}
+
 export interface ModeOption {
   id: AgentMode;
   label: string;
@@ -182,15 +191,16 @@ export interface PlanView {
 }
 
 export type ExtensionToUiMessage =
-  | { type: "initialize"; sessionId: string; mode: AgentMode; modeOptions: ModeOption[]; modelId: string; modelPolicy: ModelPolicyView; models: ModelOption[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView; workspaceName?: string }
+  | { type: "initialize"; sessionId: string; mode: AgentMode; modeOptions: ModeOption[]; modelId: string; modelPolicy: ModelPolicyView; models: ModelOption[]; skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView; workspaceName?: string }
   | { type: "sessionList"; sessions: SessionHistoryItem[]; activeSessionId: string }
-  | { type: "sessionOpened"; session: SessionHistoryItem; modeOptions: ModeOption[]; modelPolicy: ModelPolicyView; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView }
+  | { type: "sessionOpened"; session: SessionHistoryItem; modeOptions: ModeOption[]; modelPolicy: ModelPolicyView; skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[]; messages: ChatMessage[]; tools: ToolActivity[]; subagents: SubagentActivity[]; plan?: PlanView }
   | { type: "contextAdded"; ref: ContextRef }
   | { type: "modeChanged"; mode: AgentMode }
   | { type: "modesChanged"; modes: ModeOption[] }
   | { type: "modelChanged"; modelId: string }
   | { type: "modelPolicyChanged"; modelPolicy: ModelPolicyView }
   | { type: "modelsChanged"; models: ModelOption[] }
+  | { type: "skillsChanged"; skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[] }
   | { type: "runState"; state: RunState; runId?: string }
   | { type: "textDelta"; runId: string; text: string }
   | { type: "assistantMessage"; message: ChatMessage }

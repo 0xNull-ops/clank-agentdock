@@ -10,6 +10,7 @@ export const READ_TOOLS = [
   "get_diagnostics",
   "lsp",
   "semantic_search",
+  "load_skill",
   "task",
 ];
 export const IMPLEMENT_TOOLS = [...READ_TOOLS, "write_file", "edit_file", "apply_patch", "run_command"];
@@ -42,6 +43,7 @@ const READ_PERMISSION: PermissionPolicy = {
   grep: "allow",
   tree: "allow",
   semantic_search: "allow",
+  load_skill: "allow",
   lsp: "allow",
   get_diagnostics: "allow",
   git_read: "allow",

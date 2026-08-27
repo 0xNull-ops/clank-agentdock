@@ -6,3 +6,4 @@ export * from "./prompts";
 export * from "./subagents";
 export * from "./model-resolution";
 export * from "./mode-registry";
+export * from "./skill-registry";

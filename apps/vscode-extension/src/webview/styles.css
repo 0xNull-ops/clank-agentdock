@@ -178,6 +178,31 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .context-chip > span { color: #38bdf8; }
 .context-chip button { padding: 0 2px; border: 0; color: var(--forge-muted); background: transparent; cursor: pointer; }
 .context-chip button:hover { color: var(--forge-text); }
+.skill-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 180px; padding: 4px 6px 4px 8px; border: 1px solid rgba(192,132,252,.3); border-radius: 999px; color: var(--forge-text-secondary); background: rgba(168,85,247,.08); font-size: 11px; white-space: nowrap; }
+.skill-chip > span:first-child { color: #c084fc; }
+.skill-chip button { padding: 0 2px; border: 0; color: var(--forge-muted); background: transparent; cursor: pointer; }
+.skill-chip button:hover { color: var(--forge-text); }
+.skill-lock { color: var(--forge-muted); font-size: 8px; }
+.skill-picker-container { position: relative; z-index: 20; }
+.skill-picker { position: absolute; right: 0; bottom: 7px; display: grid; gap: 8px; width: min(420px, 100%); max-height: min(430px, 55vh); padding: 10px; overflow: hidden; border: 1px solid color-mix(in srgb, #c084fc 35%, var(--forge-border)); border-radius: 10px; background: color-mix(in srgb, var(--forge-raised) 97%, transparent); box-shadow: 0 18px 50px rgba(0,0,0,.48); }
+.skill-picker-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.skill-picker-head b { color: var(--forge-text); font-size: 12px; }
+.skill-picker-head small { color: var(--forge-muted); font-size: 10px; }
+.skill-picker input { width: 100%; padding: 7px 9px; border: 1px solid var(--forge-border); border-radius: 6px; outline: 0; color: var(--forge-text); background: var(--forge-input); font-size: 11px; }
+.skill-picker input:focus { border-color: rgba(192,132,252,.55); }
+.skill-options { display: grid; gap: 3px; overflow: auto; }
+.skill-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; color: var(--forge-text-secondary); background: transparent; text-align: left; cursor: pointer; }
+.skill-option:hover { background: var(--forge-hover); }
+.skill-option.selected { background: rgba(168,85,247,.1); }
+.skill-option:disabled { opacity: .8; cursor: default; }
+.skill-check { display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid var(--forge-border); border-radius: 4px; color: #c084fc; font-size: 10px; }
+.skill-option.selected .skill-check { border-color: rgba(192,132,252,.55); }
+.skill-copy { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.skill-copy b, .skill-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-copy b { color: var(--forge-text-secondary); font-size: 11px; font-weight: 600; }
+.skill-copy small { color: var(--forge-muted); font-size: 10px; }
+.skill-scope { color: var(--forge-muted); font: 9px var(--forge-code); text-transform: uppercase; }
+.skill-empty { margin: 8px; color: var(--forge-muted); font-size: 11px; text-align: center; }
 .composer { position: relative; min-height: 84px; border: 1px solid rgba(56,189,248,.25); border-radius: 12px; background: rgba(8,12,22,.96); box-shadow: 0 8px 24px rgba(0,0,0,.4); transition: border-color .18s ease, box-shadow .18s ease; overflow: hidden; }
 .composer::after { content: ""; position: absolute; bottom: 0; right: 0; width: 85px; height: 45px; pointer-events: none; background-image: repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(255,255,255,.018) 5px, rgba(255,255,255,.018) 7px); mask-image: radial-gradient(circle at bottom right, black, transparent 70%); }
 .composer:focus-within { border-color: rgba(56,189,248,.5); box-shadow: 0 0 0 2px rgba(56,189,248,.15), 0 8px 24px rgba(0,0,0,.4); }
@@ -185,8 +210,12 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .composer textarea { display: block; width: 100%; min-height: 48px; max-height: 180px; padding: 12px 14px 4px; resize: vertical; border: 0; outline: 0; color: #f1f5f9; background: transparent; font-size: 12.5px; }
 .composer textarea::placeholder { color: #64748b; }
 .composer-actions { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px 8px; }
+.composer-left-actions { display: flex; align-items: center; gap: 5px; }
 .context-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 0; border-radius: 4px; color: #facc15; background: transparent; font-size: 12px; font-weight: 500; cursor: pointer; transition: opacity .18s ease; }
 .context-btn:hover { opacity: .8; }
+.skill-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 0; border-radius: 4px; color: #c084fc; background: transparent; font-size: 12px; font-weight: 500; cursor: pointer; }
+.skill-btn:hover, .skill-btn.open { background: rgba(168,85,247,.1); }
+.skill-btn > span { display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; color: var(--forge-text); background: rgba(168,85,247,.16); font: 9px var(--forge-code); }
 .composer-right-actions { display: flex; align-items: center; gap: 10px; }
 .composer-hint { color: #64748b; font-size: 11px; }
 .key-glyph { font-family: var(--forge-code); font-size: 12px; }
@@ -339,4 +368,3 @@ h1 { margin: 1px 0 0; font-size: 14px; line-height: 1.2; font-weight: 600; lette
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--forge-border); }
 .inline-key-form { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px; background: color-mix(in srgb, var(--forge-surface) 90%, transparent); border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); animation: rise .15s ease both; }
 .inline-key-input { flex: 1; height: 26px; font-size: 11px; }
-

@@ -17,6 +17,7 @@ import type {
   ProviderProfileView,
   ModeDetailView,
   CustomModeDiagnosticView,
+  SkillOptionView,
 } from "../shared/protocol";
 import { BUILT_IN_MODES } from "../shared/protocol";
 
@@ -87,6 +88,11 @@ let activeSessionId = "";
 let historyOpen = false;
 let historyBusy = false;
 let historyQuery = "";
+let skills: SkillOptionView[] = [];
+let selectedSkillIds: string[] = [];
+let mandatorySkillIds: string[] = [];
+let skillMenuOpen = false;
+let skillQuery = "";
 
 let activeMode: AgentMode = "ask";
 let activeModel = "openai-compatible";
@@ -117,9 +123,13 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       modelPolicy = message.modelPolicy;
       if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
       models = message.models;
+      skills = message.skills;
+      selectedSkillIds = message.selectedSkillIds;
+      mandatorySkillIds = message.mandatorySkillIds;
       plan = message.plan;
       contextRefs = [];
       rebuildTimeline(message.messages, message.tools, message.subagents, message.plan);
+      appRoot.innerHTML = "";
       render();
       break;
     case "sessionList":
@@ -134,6 +144,9 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       modes = message.modeOptions;
       activeModel = message.session.modelId;
       modelPolicy = message.modelPolicy;
+      skills = message.skills;
+      selectedSkillIds = message.selectedSkillIds;
+      mandatorySkillIds = message.mandatorySkillIds;
       if (modelPolicy.policy === "fixed" && modelPolicy.modelId) activeModel = modelPolicy.modelId;
       plan = message.plan;
       checkpoints = [];
@@ -144,6 +157,7 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
       runState = "idle";
       contextRefs = [];
       rebuildTimeline(message.messages, message.tools, message.subagents, message.plan);
+      appRoot.innerHTML = "";
       render();
       break;
     case "contextAdded":
@@ -170,6 +184,12 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToUiMessage>) =
     case "modelsChanged":
       models = message.models;
       updateControlStrip();
+      break;
+    case "skillsChanged":
+      skills = message.skills;
+      selectedSkillIds = message.selectedSkillIds;
+      mandatorySkillIds = message.mandatorySkillIds;
+      updateSkillControls();
       break;
     case "runState":
       runState = message.state;
@@ -393,12 +413,13 @@ function renderChat(): void {
         <div class="rule"></div>
         <section class="transcript" id="transcript" aria-live="polite">${transcriptContent}</section>
         <footer class="composer-wrap">
-          <div class="context-chips" id="context-chips">${contextRefs.map(contextChip).join("")}</div>
+          <div class="context-chips" id="context-chips">${composerChips()}</div>
+          <div class="skill-picker-container" id="skill-picker-container">${skillMenuOpen ? skillPicker() : ""}</div>
           <form class="composer" id="composer-form">
             <div class="composer-top-indicator" title="Connected"></div>
             <textarea id="composer-input" rows="3" placeholder="Ask ${mode.label.toLowerCase()} anything…" aria-label="Message Clank"></textarea>
             <div class="composer-actions" id="composer-actions">
-              <button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
+              <div class="composer-left-actions">${composerLeftActions()}</div>
               <div class="composer-right-actions">
                 <span class="composer-hint"><span class="key-glyph">↵</span> to send</span>
                 ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
@@ -461,6 +482,9 @@ function startNewSession(): void {
   plan = undefined;
   runState = "idle";
   historyOpen = false;
+  selectedSkillIds = [];
+  mandatorySkillIds = [];
+  skillMenuOpen = false;
   vscode.postMessage({ type: "newSession" });
   updateSessionPicker();
   renderTranscript();
@@ -483,7 +507,18 @@ function updateSessionPicker(): void {
 
 function updateContextChips(): void {
   const container = document.querySelector<HTMLElement>("#context-chips");
-  if (container) container.innerHTML = contextRefs.map(contextChip).join("");
+  if (container) container.innerHTML = composerChips();
+  wireChipInteractions();
+}
+
+function updateSkillControls(): void {
+  updateContextChips();
+  const container = document.querySelector<HTMLElement>("#skill-picker-container");
+  if (container) container.innerHTML = skillMenuOpen ? skillPicker() : "";
+  const left = document.querySelector<HTMLElement>("#composer-actions .composer-left-actions");
+  if (left) left.innerHTML = composerLeftActions();
+  wireSkillInteractions();
+  document.querySelector<HTMLButtonElement>("#composer-actions [data-action=attach]")?.addEventListener("click", () => vscode.postMessage({ type: "pickContext" }));
 }
 
 function updateRunStateUi(): void {
@@ -495,7 +530,7 @@ function updateRunStateUi(): void {
   const actions = document.querySelector<HTMLElement>("#composer-actions");
   if (actions) {
     actions.innerHTML = `
-      <button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
+      <div class="composer-left-actions">${composerLeftActions()}</div>
       <div class="composer-right-actions">
         <span class="composer-hint"><span class="key-glyph">↵</span> to send</span>
         ${runState === "running" || runState === "awaiting_approval" ? `<button type="button" class="cancel-button" data-action="cancel" aria-label="Cancel run">cancel</button>` : `<button type="submit" class="send-button" aria-label="Send message">↑</button>`}
@@ -503,6 +538,7 @@ function updateRunStateUi(): void {
     `;
     document.querySelector<HTMLButtonElement>("#composer-actions [data-action=cancel]")?.addEventListener("click", () => vscode.postMessage({ type: "cancelRun" }));
     document.querySelector<HTMLButtonElement>("#composer-actions [data-action=attach]")?.addEventListener("click", () => vscode.postMessage({ type: "pickContext" }));
+    wireSkillInteractions();
   }
 
   const transcript = document.querySelector<HTMLElement>("#transcript");
@@ -1400,7 +1436,89 @@ function contextChip(ref: ContextRef): string {
   return `<span class="context-chip"><span>${ref.kind === "file" ? "▧" : "⌘"}</span>${escapeHtml(ref.label)}<button data-remove-context="${ref.id}" aria-label="Remove ${escapeHtml(ref.label)}">×</button></span>`;
 }
 
+function activeSkillIds(): string[] {
+  return [...new Set([...mandatorySkillIds, ...selectedSkillIds])];
+}
+
+function skillChip(id: string): string {
+  const skill = skills.find((item) => item.id === id);
+  if (!skill) return "";
+  const mandatory = mandatorySkillIds.includes(id);
+  const action = mandatory
+    ? `<span class="skill-lock" title="Required by the active mode">◆</span>`
+    : `<button data-remove-skill="${escapeHtml(id)}" aria-label="Remove ${escapeHtml(skill.name)}">×</button>`;
+  return `<span class="skill-chip" title="${escapeHtml(skill.description)}"><span>✦</span>${escapeHtml(skill.name)}${action}</span>`;
+}
+
+function composerChips(): string {
+  return [...contextRefs.map(contextChip), ...activeSkillIds().map(skillChip)].join("");
+}
+
+function composerLeftActions(): string {
+  const count = activeSkillIds().length;
+  return `<button type="button" class="context-btn" data-action="attach" aria-label="Attach context">＋ context</button>
+    <button type="button" class="skill-btn ${skillMenuOpen ? "open" : ""}" data-action="skills" aria-label="Choose skills" aria-expanded="${skillMenuOpen}">✦ skills${count ? ` <span>${count}</span>` : ""}</button>`;
+}
+
+function skillPicker(): string {
+  const rows = skills.map((skill) => {
+    const mandatory = mandatorySkillIds.includes(skill.id);
+    const checked = mandatory || selectedSkillIds.includes(skill.id);
+    const search = `${skill.name} ${skill.description} ${skill.id}`.toLocaleLowerCase();
+    return `<button type="button" class="skill-option ${checked ? "selected" : ""}" data-skill-id="${escapeHtml(skill.id)}" data-skill-search="${escapeHtml(search)}" ${mandatory ? "disabled" : ""}>
+      <span class="skill-check">${mandatory ? "◆" : checked ? "✓" : ""}</span>
+      <span class="skill-copy"><b>${escapeHtml(skill.name)}</b><small>${escapeHtml(skill.description || skill.id)}</small></span>
+      <span class="skill-scope">${escapeHtml(skill.scope)}</span>
+    </button>`;
+  }).join("");
+  return `<section class="skill-picker" aria-label="Available skills">
+    <div class="skill-picker-head"><b>Skills</b><small>Loaded for this conversation</small></div>
+    <input id="skill-search" type="search" value="${escapeHtml(skillQuery)}" placeholder="Search installed skills…" aria-label="Search skills">
+    <div class="skill-options">${rows || `<p class="skill-empty">No installed skills found.</p>`}</div>
+  </section>`;
+}
+
+function postSkillSelection(): void {
+  vscode.postMessage({ type: "changeSkills", skillIds: selectedSkillIds });
+}
+
+function wireChipInteractions(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-skill]").forEach((button) => button.addEventListener("click", () => {
+    const id = button.dataset.removeSkill;
+    if (!id) return;
+    selectedSkillIds = selectedSkillIds.filter((skillId) => skillId !== id);
+    postSkillSelection();
+    updateSkillControls();
+  }));
+}
+
+function wireSkillInteractions(): void {
+  document.querySelector<HTMLButtonElement>("[data-action=skills]")?.addEventListener("click", () => {
+    skillMenuOpen = !skillMenuOpen;
+    updateSkillControls();
+    if (skillMenuOpen) document.querySelector<HTMLInputElement>("#skill-search")?.focus();
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-skill-id]").forEach((button) => button.addEventListener("click", () => {
+    const id = button.dataset.skillId;
+    if (!id || mandatorySkillIds.includes(id)) return;
+    selectedSkillIds = selectedSkillIds.includes(id)
+      ? selectedSkillIds.filter((skillId) => skillId !== id)
+      : [...selectedSkillIds, id];
+    postSkillSelection();
+    updateSkillControls();
+  }));
+  document.querySelector<HTMLInputElement>("#skill-search")?.addEventListener("input", (event) => {
+    skillQuery = (event.target as HTMLInputElement).value;
+    const query = skillQuery.trim().toLocaleLowerCase();
+    document.querySelectorAll<HTMLElement>("[data-skill-search]").forEach((row) => {
+      row.hidden = query.length > 0 && !(row.dataset.skillSearch ?? "").includes(query);
+    });
+  });
+  wireChipInteractions();
+}
+
 function wireChatInteractions(): void {
+  wireSkillInteractions();
   document.querySelector<HTMLSelectElement>("#mode-select")?.addEventListener("change", (event) => {
     activeMode = (event.target as HTMLSelectElement).value as AgentMode;
     vscode.postMessage({ type: "changeMode", mode: activeMode });
@@ -1418,7 +1536,7 @@ function wireChatInteractions(): void {
     const text = input.value.trim();
     timeline.push({ kind: "user_message", id: `user-${Date.now()}`, text, createdAt: Date.now() });
     runState = "running";
-    vscode.postMessage({ type: "sendMessage", text, mode: activeMode, modelId: activeModel, context: contextRefs });
+    vscode.postMessage({ type: "sendMessage", text, mode: activeMode, modelId: activeModel, context: contextRefs, skillIds: selectedSkillIds });
     input.value = "";
     renderTranscript();
     updateRunStateUi();
@@ -1862,4 +1980,3 @@ function safeCssToken(value: string): string {
 }
 
 vscode.postMessage({ type: "ready" });
-

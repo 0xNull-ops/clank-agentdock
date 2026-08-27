@@ -11,6 +11,7 @@ import {
   type ToolActivity,
   type SubagentActivity,
   type ModeOption,
+  type SkillOptionView,
   type PlanView,
   type ProviderProfileView,
   type ModeDetailView,
@@ -32,10 +33,12 @@ import {
 } from "./runtime/provider-profiles";
 import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
 import { CustomModeStore } from "./runtime/custom-modes";
+import { SkillStore } from "./runtime/skills";
 import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActivityFromRecord, toolActivitiesFromSnapshot } from "./shared/session-history";
 
 const VIEW_ID = "agentdock.agentView";
 const SESSION_LIST_LIMIT = 2_000;
+const SESSION_SKILLS_STATE_KEY = "agentdock.sessionSkills.v1";
 
 let sessionPersistence: SessionPersistenceCoordinator | undefined;
 
@@ -50,6 +53,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const sessionPersistenceCoordinator = await SessionPersistenceCoordinator.open(context);
     sessionPersistence = sessionPersistenceCoordinator;
     const customModes = await CustomModeStore.open(context);
+    const skills = await SkillStore.open(context);
     const providerProfiles = await ProviderProfileStore.open(context, { legacyConfiguration: vscode.workspace.getConfiguration("agentdock") });
     const recent = (await sessionPersistence.list({ limit: 1 }))[0];
     const restored = recent ? await sessionPersistence.restore(recent.id) : undefined;
@@ -62,6 +66,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       sessionPersistence,
       providerProfiles,
       customModes,
+      skills,
       restored,
       replayMessages,
       snapshot ? toolActivitiesFromSnapshot(snapshot) : [],
@@ -102,6 +107,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await provider.refreshModels(true);
       }),
       customModes,
+      skills,
       { dispose: () => { void sessionPersistence?.close(); } },
     );
   } catch (error) {
@@ -145,6 +151,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     private readonly persistence: SessionPersistenceCoordinator,
     private readonly providerProfiles: ProviderProfileStore,
     private readonly customModes: CustomModeStore,
+    private readonly skills: SkillStore,
     restored?: RestoredSession,
     replayMessages?: NormalizedMessage[],
     restoredTools: ToolActivity[] = [],
@@ -166,8 +173,9 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.restoredMessages = restored ? chatMessagesFromNormalized(restored.messages) : [];
     this.restoredTools = restoredTools;
     this.restoredSubagents = restoredSubagents;
-    this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence, providerProfiles, customModes);
+    this.runtime = new AgentRuntimeBridge({ context, post: (message) => this.post(message) }, persistence, providerProfiles, customModes, skills);
     context.subscriptions.push(customModes.onDidChange(() => this.handleModesReloaded()));
+    context.subscriptions.push(skills.onDidChange(() => this.postSkillState()));
     if (restored) this.runtime.restoreHistory(restored.session.id, replayMessages ?? restored.messages);
   }
 
@@ -207,6 +215,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           modelId: this.modelId,
           modelPolicy: this.runtime.modelPolicyState(this.mode),
           models: this.runtime.cachedModelOptions(this.modelId, this.mode),
+          ...this.skillState(),
           messages: this.restoredMessages,
           tools: this.restoredTools,
           subagents: this.restoredSubagents,
@@ -238,6 +247,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
           this.post({ type: "modelsChanged", models: this.runtime.cachedModelOptions(this.modelId, this.mode) });
           this.post({ type: "modeChanged", mode: this.mode });
           this.post({ type: "modelPolicyChanged", modelPolicy: this.runtime.modelPolicyState(this.mode) });
+          this.postSkillState();
           await this.persistence.updateSessionSelection(this.sessionId, { activeMode: this.mode, ...(modeModel ? { modelId: modeModel } : {}) });
         });
         return;
@@ -265,9 +275,16 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
             const stored = this.contextSnapshots.get(id);
             return stored ? [{ ...stored.ref, snapshot: stored.snapshot }] : [];
           });
-          void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context })
+          const skillIds = await this.setSelectedSkills(message.skillIds);
+          void this.runtime.run({ sessionId: this.sessionId, text: message.text, mode: message.mode, modelId: message.modelId, context, skillIds })
             .finally(() => this.postSessionList())
             .catch((error) => this.post({ type: "error", kind: "unknown", message: error instanceof Error ? error.message : String(error) }));
+        });
+        return;
+      case "changeSkills":
+        await this.enqueueSessionOperation(async () => {
+          await this.setSelectedSkills(message.skillIds);
+          this.postSkillState();
         });
         return;
       case "cancelRun":
@@ -700,6 +717,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       modelId: this.modelId,
       models: this.runtime.cachedModelOptions(this.modelId, this.mode),
       modelPolicy: this.runtime.modelPolicyState(this.mode),
+      ...this.skillState(),
       messages: [],
       tools: [],
       subagents: [],
@@ -766,6 +784,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       session: sessionHistoryItemFromSession(restored.session),
       modeOptions: this.modeOptions(),
       modelPolicy: this.runtime.modelPolicyState(this.mode),
+      ...this.skillState(),
       messages: this.restoredMessages,
       tools: this.restoredTools,
       subagents: this.restoredSubagents,
@@ -794,6 +813,8 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     if (this.runtime.isRunning(sessionId)) return this.post({ type: "error", kind: "workspace", message: "Cancel the active run before duplicating this session." });
     const duplicate = await this.persistence.duplicateSession(sessionId);
     if (!duplicate) return this.post({ type: "error", kind: "workspace", message: "That session is not available in this workspace." });
+    const sourceSkills = this.context.workspaceState.get<Record<string, string[]>>(SESSION_SKILLS_STATE_KEY, {})[sessionId] ?? [];
+    await this.setSelectedSkills(sourceSkills, duplicate.id);
     await this.openSession(duplicate.id);
   }
 
@@ -809,6 +830,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     if (confirmed !== "Delete") return;
     this.runtime.cancel(sessionId);
     if (!await this.persistence.deleteSession(sessionId)) return;
+    await this.deleteSelectedSkills(sessionId);
     if (sessionId === this.sessionId) await this.startNewSession();
     else await this.postSessionList();
   }
@@ -1346,6 +1368,42 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "settingsState", state });
   }
 
+  private skillState(): { skills: SkillOptionView[]; selectedSkillIds: string[]; mandatorySkillIds: string[] } {
+    const selectedSkillIds = this.context.workspaceState.get<Record<string, string[]>>(SESSION_SKILLS_STATE_KEY, {})[this.sessionId] ?? [];
+    const modeSkills = this.customModes.get(this.mode)?.skills ?? [];
+    return {
+      skills: this.skills.options().map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        description: skill.description,
+        scope: skill.scope === "user" ? "global" : skill.scope,
+        sourceKind: skill.sourceKind,
+      })),
+      selectedSkillIds: selectedSkillIds.slice(0, 20),
+      mandatorySkillIds: this.skills.resolveIds(modeSkills).resolved,
+    };
+  }
+
+  private postSkillState(): void {
+    this.post({ type: "skillsChanged", ...this.skillState() });
+  }
+
+  private async setSelectedSkills(ids: readonly string[], sessionId = this.sessionId): Promise<string[]> {
+    const { resolved, missing } = this.skills.resolveIds(ids);
+    if (missing.length) {
+      this.post({ type: "error", kind: "workspace", message: `Unavailable skill${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}. Refresh the installed skills and select again.` });
+    }
+    const selections = this.context.workspaceState.get<Record<string, string[]>>(SESSION_SKILLS_STATE_KEY, {});
+    await this.context.workspaceState.update(SESSION_SKILLS_STATE_KEY, { ...selections, [sessionId]: resolved });
+    return resolved;
+  }
+
+  private async deleteSelectedSkills(sessionId: string): Promise<void> {
+    const selections = { ...this.context.workspaceState.get<Record<string, string[]>>(SESSION_SKILLS_STATE_KEY, {}) };
+    delete selections[sessionId];
+    await this.context.workspaceState.update(SESSION_SKILLS_STATE_KEY, selections);
+  }
+
   private post(message: ExtensionToUiMessage): void {
     void this.view?.webview.postMessage(message);
   }
@@ -1476,6 +1534,8 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
       return typeof message.mode === "string" && validateModeSlug(message.mode) === undefined;
     case "changeModel":
       return typeof message.modelId === "string" && message.modelId.length > 0 && message.modelId.length <= 256;
+    case "changeSkills":
+      return isSkillIds(message.skillIds);
     case "approveTool":
     case "denyTool":
       return typeof message.approvalId === "string" && message.approvalId.length <= 256;
@@ -1510,10 +1570,17 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
         && message.modelId.length <= 256
         && Array.isArray(message.context)
         && message.context.length <= 32
-        && message.context.every(isContextRef);
+        && message.context.every(isContextRef)
+        && isSkillIds(message.skillIds);
     default:
       return false;
   }
+}
+
+function isSkillIds(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length <= 20
+    && value.every((item) => typeof item === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item));
 }
 
 function safeModeSlug(value: string): string {
@@ -1526,17 +1593,17 @@ function validateModeSlug(value: string): string | undefined {
 
 function modeAuthority(authority: "read" | "write"): Pick<ModeDefinition, "tools" | "permission" | "skills" | "delegationAllowed" | "allowedAgents" | "delegationEffects"> {
   if (authority === "write") return {
-    tools: ["read*", "list_directory", "glob", "grep", "git_*", "get_diagnostics", "write_file", "edit_file", "apply_patch", "run_command", "task"],
+    tools: ["read*", "list_directory", "glob", "grep", "git_*", "get_diagnostics", "load_skill", "write_file", "edit_file", "apply_patch", "run_command", "task"],
     permission: {
-      read: "allow", list_directory: "allow", glob: "allow", grep: "allow", git_read: "allow", get_diagnostics: "allow",
+      read: "allow", list_directory: "allow", glob: "allow", grep: "allow", git_read: "allow", get_diagnostics: "allow", load_skill: "allow",
       write_file: "ask", edit_file: "ask", apply_patch: "ask", run_command: { "*": "ask", "git push*": "deny" }, task: "allow",
     },
     skills: [], delegationAllowed: true,
     allowedAgents: ["explore", "research", "test", "review", "general", "implementer"], delegationEffects: "write",
   };
   return {
-    tools: ["read*", "list_directory", "glob", "grep", "git_*", "get_diagnostics", "task"],
-    permission: { read: "allow", list_directory: "allow", glob: "allow", grep: "allow", git_read: "allow", get_diagnostics: "allow", edit: "deny", write: "deny", run_command: "deny", task: "allow" },
+    tools: ["read*", "list_directory", "glob", "grep", "git_*", "get_diagnostics", "load_skill", "task"],
+    permission: { read: "allow", list_directory: "allow", glob: "allow", grep: "allow", git_read: "allow", get_diagnostics: "allow", load_skill: "allow", edit: "deny", write: "deny", run_command: "deny", task: "allow" },
     skills: [], delegationAllowed: true, allowedAgents: ["explore", "research", "test", "review"], delegationEffects: "read-only",
   };
 }

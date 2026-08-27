@@ -159,6 +159,9 @@ describe("webview mount (blank-panel regression)", () => {
       modelId: "model-x",
       modelPolicy: { policy: "user-selectable" },
       models: [{ id: "model-x", label: "Model X", hint: "test" }],
+      skills: [{ id: "review", name: "Review", description: "Review changes", scope: "installed", sourceKind: "installed" }],
+      selectedSkillIds: ["review"],
+      mandatorySkillIds: [],
       messages: [{ id: "m1", role: "assistant", text: "Hello from the harness", createdAt: Date.now() }],
       tools: [],
       subagents: [],
@@ -168,5 +171,7 @@ describe("webview mount (blank-panel regression)", () => {
 
     expect(harness.app.innerHTML).toContain("Hello from the harness");
     expect(harness.app.innerHTML).toContain("AGENT");
+    expect(harness.app.innerHTML).toContain("skill-chip");
+    expect(harness.app.innerHTML).toContain("Review");
   });
 });

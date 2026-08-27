@@ -41,4 +41,17 @@ describe("prompt composition", () => {
     expect(prompt).toContain("diagnostics, active-file");
     expect(prompt).toContain("# Response template\nReturn findings, then follow-ups.");
   });
+
+  test("advertises skill metadata separately from active skill instructions", () => {
+    const mode = BUILT_IN_MODES.find((item) => item.slug === "ask")!;
+    const prompt = composeSystemPrompt({
+      mode,
+      availableSkills: [{ id: "review", name: "Review", description: "Review a change.", scope: "installed", sourceKind: "installed" }],
+      skills: [{ source: "skill:focused", content: "Inspect the changed lines only." }],
+    });
+
+    expect(prompt).toContain("# Available skills\n- review: Review a change.");
+    expect(prompt).toContain("# Active skills\n## Source: skill:focused");
+    expect(prompt.indexOf("# Available skills")).toBeLessThan(prompt.indexOf("# Active skills"));
+  });
 });
