@@ -99,6 +99,24 @@
           "default": "openai-compatible",
           "description": "Model id used when a new session starts. Configure the endpoint-specific id under Agent Harness › Provider: Model."
         },
+        "agentdock.subagents.defaultAuthority": {
+          "type": "string",
+          "enum": ["read-only", "same-as-parent", "write"],
+          "default": "read-only",
+          "description": "Default authority granted to spawned subagents. 'write' allows subagents to make changes to files."
+        },
+        "agentdock.subagents.maxSteps": {
+          "type": "integer",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum autonomous tool steps allowed per subagent turn."
+        },
+        "agentdock.subagents.requireWriteApproval": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether spawning write-capable subagents requires manual user confirmation."
+        },
         "agentdock.subagents.maxConcurrent": {
           "type": "integer",
           "default": 3,
@@ -110,7 +128,7 @@
           "type": "integer",
           "default": 8,
           "minimum": 1,
-          "maximum": 8,
+          "maximum": 16,
           "description": "Maximum total subagents accepted during one parent turn."
         },
         "agentdock.subagents.maxDepth": {

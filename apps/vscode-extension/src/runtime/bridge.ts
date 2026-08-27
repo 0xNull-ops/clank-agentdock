@@ -16,6 +16,7 @@ import {
   type ApprovalRequest,
   type ModeDefinition,
   type ModelResolutionInput,
+  type DelegationEffects,
   type NormalizedContent,
   type NormalizedMessage,
   type PermissionRequest,
@@ -356,24 +357,37 @@ export class AgentRuntimeBridge {
     let subagentWrites: Promise<void> = Promise.resolve();
     let subagentEventWrites: Promise<void> = Promise.resolve();
     const subagentExecutions = new Set<Promise<unknown>>();
+    const subagentsConfig = vscode.workspace.getConfiguration("agentdock");
+    const configuredAuthority = subagentsConfig.get<string>("subagents.defaultAuthority", "read-only");
+    const requireWriteApproval = subagentsConfig.get<boolean>("subagents.requireWriteApproval", true);
+    const rootAuthority: DelegationEffects = configuredAuthority === "write" ? "write" : mode.delegationEffects;
+    const effectiveRootMode = configuredAuthority === "write" && (mode.slug === "ask" || mode.slug === "review")
+      ? { ...mode, delegationEffects: "write" as const }
+      : mode;
+
     const orchestrator = new SubagentOrchestrator({
       rootParent: {
-        mode,
-        authority: mode.delegationEffects,
+        mode: effectiveRootMode,
+        authority: rootAuthority,
         depth: 0,
         workspaceId: session.workspaceId,
       },
       maxConcurrent: boundedSetting("subagents.maxConcurrent", 3, 1, 8),
-      maxTotal: boundedSetting("subagents.maxTotal", 8, 1, 8),
+      maxTotal: boundedSetting("subagents.maxTotal", 8, 1, 16),
       maxDepth: boundedSetting("subagents.maxDepth", mode.slug === "orchestrate" ? 2 : 1, 0, 2),
       definitions: customSubagents,
-      approveWriteSpawn: (task, _parent, signal) => this.waitForEphemeralApproval(input.sessionId, {
-        id: `spawn:${task.id}`,
-        toolName: `task:${task.agent}`,
-        summary: `Spawn ${task.agent} with write access: ${compactText(task.prompt, 180)}`,
-        reason: "Write-capable subagents can change the workspace and must be approved before they start.",
-        risk: "high",
-      }, signal),
+      approveWriteSpawn: (task, _parent, signal) => {
+        if (!requireWriteApproval) {
+          return Promise.resolve("allow" as const);
+        }
+        return this.waitForEphemeralApproval(input.sessionId, {
+          id: `spawn:${task.id}`,
+          toolName: `task:${task.agent}`,
+          summary: `Spawn ${task.agent} with write access: ${compactText(task.prompt, 180)}`,
+          reason: "Write-capable subagents can change the workspace and must be approved before they start.",
+          risk: "high",
+        }, signal);
+      },
       onEvent: (event) => {
         this.onSubagentEvent(input.sessionId, configuration, event);
         subagentEventWrites = subagentEventWrites
@@ -430,6 +444,7 @@ export class AgentRuntimeBridge {
         systemPrompt,
         tools,
         permissionEngine,
+        maxSteps: boundedSetting("maxSteps", 20, 1, 100),
         approve: (request) => this.waitForApproval(input.sessionId, request),
         signal: controller.signal,
         initialMessages,
@@ -720,6 +735,9 @@ export class AgentRuntimeBridge {
     });
     const refs = (task.context.contextRefs ?? []).slice(0, 32).map((ref) => `- ${compactText(ref, 512)}`).join("\n");
     const userContent = refs ? `${task.prompt}\n\nSelected context references (untrusted data):\n${refs}` : task.prompt;
+    const subagentMaxSteps = boundedSetting("subagents.maxSteps", childMode.steps ?? 15, 1, 50);
+    const requireApproval = vscode.workspace.getConfiguration("agentdock").get<boolean>("subagents.requireWriteApproval", true);
+
     const runChild = () => runAgent({
       session: childSession,
       provider,
@@ -727,13 +745,19 @@ export class AgentRuntimeBridge {
       systemPrompt,
       tools,
       permissionEngine,
-      approve: (request) => this.waitForEphemeralApproval(task.id, {
-        id: `subagent:${task.id}:${request.call.id}`,
-        toolName: request.call.toolName,
-        summary: `The ${task.agent} subagent wants to run ${request.call.toolName}.`,
-        reason: request.decision.reason ?? "This child action needs explicit approval.",
-        risk: request.call.toolName === "run_command" ? "high" : "medium",
-      }, task.signal),
+      maxSteps: subagentMaxSteps,
+      approve: (request) => {
+        if (!requireApproval && task.authority === "write") {
+          return Promise.resolve("allow" as const);
+        }
+        return this.waitForEphemeralApproval(task.id, {
+          id: `subagent:${task.id}:${request.call.id}`,
+          toolName: request.call.toolName,
+          summary: `The ${task.agent} subagent wants to run ${request.call.toolName}.`,
+          reason: request.decision.reason ?? "This child action needs explicit approval.",
+          risk: request.call.toolName === "run_command" ? "high" : "medium",
+        }, task.signal);
+      },
       signal: task.signal,
       initialMessages: [{ role: "user", content: userContent }],
       modelResolution: {

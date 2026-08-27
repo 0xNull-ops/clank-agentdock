@@ -518,6 +518,30 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         await this.postSettingsState();
         return;
       }
+      case "saveSubagentSettings": {
+        const config = vscode.workspace.getConfiguration("agentdock");
+        if (message.defaultAuthority !== undefined) {
+          await config.update("subagents.defaultAuthority", message.defaultAuthority, vscode.ConfigurationTarget.Global);
+        }
+        if (message.maxSteps !== undefined) {
+          await config.update("subagents.maxSteps", message.maxSteps, vscode.ConfigurationTarget.Global);
+        }
+        if (message.maxConcurrent !== undefined) {
+          await config.update("subagents.maxConcurrent", message.maxConcurrent, vscode.ConfigurationTarget.Global);
+        }
+        if (message.maxTotal !== undefined) {
+          await config.update("subagents.maxTotal", message.maxTotal, vscode.ConfigurationTarget.Global);
+        }
+        if (message.maxDepth !== undefined) {
+          await config.update("subagents.maxDepth", message.maxDepth, vscode.ConfigurationTarget.Global);
+        }
+        if (message.requireWriteApproval !== undefined) {
+          await config.update("subagents.requireWriteApproval", message.requireWriteApproval, vscode.ConfigurationTarget.Global);
+        }
+        await this.postSettingsState();
+        void vscode.window.showInformationMessage("Subagent settings saved.");
+        return;
+      }
       case "saveProviderProfile": {
         const input = message.profile;
         const preset = input.presetId ? providerPreset(input.presetId) : undefined;
@@ -1627,6 +1651,14 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       defaultMode,
       defaultModel,
       maxSteps,
+      subagents: {
+        defaultAuthority: config.get<"read-only" | "same-as-parent" | "write">("subagents.defaultAuthority", "read-only"),
+        maxSteps: config.get<number>("subagents.maxSteps", 15),
+        maxConcurrent: config.get<number>("subagents.maxConcurrent", 3),
+        maxTotal: config.get<number>("subagents.maxTotal", 8),
+        maxDepth: config.get<number>("subagents.maxDepth", 1),
+        requireWriteApproval: config.get<boolean>("subagents.requireWriteApproval", true),
+      },
       workspaceName: vscode.workspace.name,
       freebuffSidecarStatus: sidecarStatus.status,
       freebuffSidecarError: sidecarStatus.error,
@@ -1810,6 +1842,13 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
       return typeof message.mode === "string" && message.mode.length > 0 && message.mode.length <= 128;
     case "saveMaxSteps":
       return typeof message.steps === "number" && Number.isSafeInteger(message.steps) && message.steps >= 1 && message.steps <= 100;
+    case "saveSubagentSettings":
+      return (message.defaultAuthority === undefined || ["read-only", "same-as-parent", "write"].includes(message.defaultAuthority as string))
+        && (message.maxSteps === undefined || (typeof message.maxSteps === "number" && Number.isSafeInteger(message.maxSteps) && message.maxSteps >= 1 && message.maxSteps <= 50))
+        && (message.maxConcurrent === undefined || (typeof message.maxConcurrent === "number" && Number.isSafeInteger(message.maxConcurrent) && message.maxConcurrent >= 1 && message.maxConcurrent <= 8))
+        && (message.maxTotal === undefined || (typeof message.maxTotal === "number" && Number.isSafeInteger(message.maxTotal) && message.maxTotal >= 1 && message.maxTotal <= 16))
+        && (message.maxDepth === undefined || (typeof message.maxDepth === "number" && Number.isSafeInteger(message.maxDepth) && message.maxDepth >= 0 && message.maxDepth <= 2))
+        && (message.requireWriteApproval === undefined || typeof message.requireWriteApproval === "boolean");
     case "saveProviderProfile":
       return typeof message.profile === "object" && message.profile !== null && typeof (message.profile as Record<string, unknown>).name === "string" && typeof (message.profile as Record<string, unknown>).baseUrl === "string";
     case "saveCustomMode":

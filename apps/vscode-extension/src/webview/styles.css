@@ -639,3 +639,22 @@ body[data-theme="beige"],
 [data-theme="beige"] .highlight-blue {
   color: #14110f;
 }
+
+.subagents-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.subagent-dir-card {
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.subagent-dir-card:hover {
+  border-color: var(--forge-border-strong);
+}
+
+[data-theme="beige"] .subagent-dir-card {
+  background: #dbd3c4 !important;
+  border-color: var(--forge-border) !important;
+}

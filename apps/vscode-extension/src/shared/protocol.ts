@@ -69,7 +69,16 @@ export type UiToExtensionMessage =
   | { type: "setupVibeProxy" }
   | { type: "setupAiHubMix"; apiKey: string }
   | { type: "openExternalUrl"; url: string }
-  | { type: "toggleFreebuffSidecar" };
+  | { type: "toggleFreebuffSidecar" }
+  | {
+      type: "saveSubagentSettings";
+      defaultAuthority?: "read-only" | "same-as-parent" | "write";
+      maxSteps?: number;
+      maxConcurrent?: number;
+      maxTotal?: number;
+      maxDepth?: number;
+      requireWriteApproval?: boolean;
+    };
 
 export interface SaveProviderProfileInput {
   id?: string;
@@ -182,6 +191,15 @@ export interface CustomModeDiagnosticView {
 
 export type FreebuffSidecarStatus = "stopped" | "starting" | "running" | "error";
 
+export interface SubagentSettingsView {
+  defaultAuthority: "read-only" | "same-as-parent" | "write";
+  maxSteps: number;
+  maxConcurrent: number;
+  maxTotal: number;
+  maxDepth: number;
+  requireWriteApproval: boolean;
+}
+
 export interface HarnessSettingsState {
   activeProfile?: ProviderProfileView;
   profiles: ProviderProfileView[];
@@ -191,6 +209,7 @@ export interface HarnessSettingsState {
   defaultMode: string;
   defaultModel: string;
   maxSteps: number;
+  subagents?: SubagentSettingsView;
   workspaceName?: string;
   freebuffSidecarStatus?: FreebuffSidecarStatus;
   freebuffSidecarError?: string;

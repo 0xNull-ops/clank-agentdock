@@ -64,7 +64,7 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 let currentView: "chat" | "settings" = "chat";
-let settingsTab: "modes" | "providers" | "general" = "modes";
+let settingsTab: "modes" | "subagents" | "providers" | "general" = "modes";
 let settingsQuery = "";
 let settingsState: HarnessSettingsState | undefined;
 const providerTestResults: Record<string, { success: boolean; message: string; loading?: boolean }> = {};
@@ -1086,8 +1086,12 @@ function renderSettings(): void {
         <nav class="settings-tabs" role="tablist">
           <button class="settings-tab ${settingsTab === "modes" ? "active" : ""}" data-tab="modes" role="tab" aria-selected="${settingsTab === "modes"}">
             <span class="tab-glyph">👥</span>
-            <span>Agents &amp; Modes</span>
+            <span>Modes</span>
             <span class="settings-count">${modesCount}</span>
+          </button>
+          <button class="settings-tab ${settingsTab === "subagents" ? "active" : ""}" data-tab="subagents" role="tab" aria-selected="${settingsTab === "subagents"}">
+            <span class="tab-glyph">🌿</span>
+            <span>Subagents</span>
           </button>
           <button class="settings-tab ${settingsTab === "providers" ? "active" : ""}" data-tab="providers" role="tab" aria-selected="${settingsTab === "providers"}">
             <span class="tab-glyph">🗄</span>
@@ -1103,12 +1107,12 @@ function renderSettings(): void {
 
       <div class="settings-search-wrap">
         <span class="search-icon">🔍</span>
-        <input id="settings-search" class="settings-search" type="search" value="${escapeHtml(settingsQuery)}" placeholder="Filter ${settingsTab === "modes" ? "modes, tools, models" : settingsTab === "providers" ? "providers, endpoints, models" : "settings"}…" aria-label="Search settings" />
+        <input id="settings-search" class="settings-search" type="search" value="${escapeHtml(settingsQuery)}" placeholder="Filter ${settingsTab === "modes" ? "modes, tools, models" : settingsTab === "subagents" ? "subagents, authority, steps" : settingsTab === "providers" ? "providers, endpoints, models" : "settings"}…" aria-label="Search settings" />
         ${settingsQuery ? `<button class="clear-search-btn" data-action="clear-search" aria-label="Clear filter">×</button>` : ""}
       </div>
 
       <main class="settings-body" id="settings-scroll-body">
-        ${settingsTab === "modes" ? renderModesTab() : settingsTab === "providers" ? renderProvidersTab() : renderGeneralTab()}
+        ${settingsTab === "modes" ? renderModesTab() : settingsTab === "subagents" ? renderSubagentsTab() : settingsTab === "providers" ? renderProvidersTab() : renderGeneralTab()}
       </main>
     </section>`;
   wireSettingsInteractions();
@@ -1566,6 +1570,110 @@ function renderProviderForm(editingProfile?: ProviderProfileView): string {
 function providerPresetHelp(preset: ProviderPresetView): string {
   const help = preset.helpText ?? preset.description;
   return `<div class="provider-preset-help"><b>${escapeHtml(preset.name)}</b><span>${escapeHtml(help)}</span>${preset.helpUrl ? `<code>${escapeHtml(preset.helpUrl)}</code>` : ""}</div>`;
+}
+
+function renderSubagentsTab(): string {
+  const subagentsState = settingsState?.subagents;
+  const authority = subagentsState?.defaultAuthority ?? "read-only";
+  const subagentSteps = subagentsState?.maxSteps ?? 15;
+  const turnSteps = settingsState?.maxSteps ?? 20;
+  const concurrent = subagentsState?.maxConcurrent ?? 3;
+  const total = subagentsState?.maxTotal ?? 8;
+  const depth = subagentsState?.maxDepth ?? 1;
+  const requireApproval = subagentsState?.requireWriteApproval ?? true;
+
+  const builtInSubagentsList = [
+    { slug: "explore", name: "Explore", desc: "Read-only codebase investigator for searching, grepping, and reading files.", defaultAuth: "read-only", icon: "🔍" },
+    { slug: "general", name: "General", desc: "Broad autonomous worker for bounded execution and synthesis.", defaultAuth: "write", icon: "⚡" },
+    { slug: "test", name: "Test", desc: "Validation specialist for running test runners, linters, and diagnostics.", defaultAuth: "read-only", icon: "🧪" },
+    { slug: "review", name: "Review", desc: "Code and architecture reviewer producing prioritized findings.", defaultAuth: "read-only", icon: "📋" },
+    { slug: "research", name: "Research", desc: "Documentation and repository evidence gathering specialist.", defaultAuth: "read-only", icon: "📚" },
+    { slug: "implementer", name: "Implementer", desc: "Implementation worker permitted to edit code and create files.", defaultAuth: "write", icon: "🛠" },
+  ];
+
+  return `
+    <div class="subagents-settings">
+      <div class="general-setting-item">
+        <label for="subagent-authority">Subagent Authority Level</label>
+        <p class="setting-help">Controls whether delegated subagents can make code changes and edit files or only perform read-only analysis.</p>
+        <select id="subagent-authority" class="setting-select">
+          <option value="read-only" ${authority === "read-only" ? "selected" : ""}>Read-Only (Safest) — Subagents cannot modify any files</option>
+          <option value="same-as-parent" ${authority === "same-as-parent" ? "selected" : ""}>Same as Parent — Inherit write capability if parent mode allows writing</option>
+          <option value="write" ${authority === "write" ? "selected" : ""}>Write Authority — Permit write-capable subagents (Implementer, General) to modify files</option>
+        </select>
+        
+        <div style="margin-top: 12px;">
+          <label class="checkbox-label" style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--forge-text);">
+            <input type="checkbox" id="subagent-require-approval" ${requireApproval ? "checked" : ""} />
+            Require user confirmation before spawning write-capable subagents
+          </label>
+        </div>
+      </div>
+
+      <div class="general-setting-item">
+        <label>Execution &amp; Step Budgets</label>
+        <p class="setting-help">Configure autonomous loop limits and worker bounds for subagent runs.</p>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
+          <div>
+            <label for="subagent-max-steps" style="font-size: 11px; font-weight: 500;">Subagent Step Budget</label>
+            <p class="setting-help" style="margin-bottom: 4px;">Max steps per subagent.</p>
+            <input id="subagent-max-steps" class="setting-input" type="number" min="1" max="50" value="${subagentSteps}" />
+          </div>
+          <div>
+            <label for="parent-turn-max-steps" style="font-size: 11px; font-weight: 500;">Turn Step Budget</label>
+            <p class="setting-help" style="margin-bottom: 4px;">Max steps for parent turn.</p>
+            <input id="parent-turn-max-steps" class="setting-input" type="number" min="1" max="100" value="${turnSteps}" />
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+          <div>
+            <label for="subagent-max-concurrent" style="font-size: 11px; font-weight: 500;">Max Concurrent Workers</label>
+            <p class="setting-help" style="margin-bottom: 4px;">Parallel subagents running simultaneously.</p>
+            <input id="subagent-max-concurrent" class="setting-input" type="number" min="1" max="8" value="${concurrent}" />
+          </div>
+          <div>
+            <label for="subagent-max-total" style="font-size: 11px; font-weight: 500;">Max Total Subagents</label>
+            <p class="setting-help" style="margin-bottom: 4px;">Max spawned subagents per turn.</p>
+            <input id="subagent-max-total" class="setting-input" type="number" min="1" max="16" value="${total}" />
+          </div>
+        </div>
+
+        <div style="margin-top: 10px;">
+          <label for="subagent-max-depth" style="font-size: 11px; font-weight: 500;">Delegation Nesting Depth</label>
+          <p class="setting-help" style="margin-bottom: 4px;">How deep subagents can recursively delegate to children.</p>
+          <select id="subagent-max-depth" class="setting-select">
+            <option value="1" ${depth === 1 ? "selected" : ""}>Depth 1 — Direct delegation only (Parent ➔ Subagent)</option>
+            <option value="2" ${depth === 2 ? "selected" : ""}>Depth 2 — Nested delegation (Orchestrator ➔ Subagent ➔ Child Subagent)</option>
+            <option value="0" ${depth === 0 ? "selected" : ""}>Depth 0 — Disable subagent spawning</option>
+          </select>
+        </div>
+
+        <div style="margin-top: 14px;">
+          <button type="button" class="settings-action-btn primary" id="btn-save-subagents">Save Subagent Settings</button>
+        </div>
+      </div>
+
+      <div class="general-setting-item">
+        <label>Available Subagent Directory</label>
+        <p class="setting-help">Specialized agents available for orchestration and task delegation in this workspace.</p>
+        <div class="subagent-directory-grid" style="display: grid; gap: 8px; margin-top: 8px;">
+          ${builtInSubagentsList.map((agent) => `
+            <div class="subagent-dir-card" style="display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); background: var(--forge-surface-2);">
+              <span style="font-size: 16px;">${agent.icon}</span>
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <b style="font-size: 11.5px; color: var(--forge-text);">${escapeHtml(agent.name)} <code style="font-size: 9.5px; opacity: 0.7;">task:${agent.slug}</code></b>
+                  <span style="font-size: 9px; font-family: var(--forge-code); padding: 1px 5px; border-radius: 3px; background: ${agent.defaultAuth === "write" ? "rgba(245, 158, 11, 0.15); color: #f59e0b;" : "rgba(59, 130, 246, 0.15); color: #3b82f6;"}">${agent.defaultAuth === "write" ? "WRITE-CAPABLE" : "READ-ONLY"}</span>
+                </div>
+                <p style="margin: 3px 0 0; font-size: 10.5px; color: var(--forge-text-secondary); line-height: 1.35;">${escapeHtml(agent.desc)}</p>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderGeneralTab(): string {
@@ -2155,7 +2263,7 @@ function wireSettingsInteractions(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((btn) => btn.addEventListener("click", (event) => {
     event.preventDefault();
     const target = (event.currentTarget as HTMLElement).closest<HTMLElement>("[data-tab]") ?? btn;
-    const tab = target.dataset.tab as "modes" | "providers" | "general" | undefined;
+    const tab = target.dataset.tab as "modes" | "subagents" | "providers" | "general" | undefined;
     if (tab) {
       settingsTab = tab;
       isAddingProvider = false;
@@ -2477,6 +2585,30 @@ function wireSettingsInteractions(): void {
     if (Number.isSafeInteger(steps) && steps >= 1 && steps <= 100) {
       vscode.postMessage({ type: "saveMaxSteps", steps });
     }
+  });
+
+  document.querySelector<HTMLButtonElement>("#btn-save-subagents")?.addEventListener("click", () => {
+    const authority = (document.querySelector<HTMLSelectElement>("#subagent-authority")?.value ?? "read-only") as "read-only" | "same-as-parent" | "write";
+    const requireApproval = document.querySelector<HTMLInputElement>("#subagent-require-approval")?.checked ?? true;
+    const subagentSteps = Number(document.querySelector<HTMLInputElement>("#subagent-max-steps")?.value ?? 15);
+    const turnSteps = Number(document.querySelector<HTMLInputElement>("#parent-turn-max-steps")?.value ?? 20);
+    const concurrent = Number(document.querySelector<HTMLInputElement>("#subagent-max-concurrent")?.value ?? 3);
+    const total = Number(document.querySelector<HTMLInputElement>("#subagent-max-total")?.value ?? 8);
+    const depth = Number(document.querySelector<HTMLSelectElement>("#subagent-max-depth")?.value ?? 1);
+
+    vscode.postMessage({
+      type: "saveSubagentSettings",
+      defaultAuthority: authority,
+      requireWriteApproval: requireApproval,
+      maxSteps: subagentSteps,
+      maxConcurrent: concurrent,
+      maxTotal: total,
+      maxDepth: depth,
+    });
+    vscode.postMessage({
+      type: "saveMaxSteps",
+      steps: turnSteps,
+    });
   });
 
   document.querySelector<HTMLButtonElement>("[data-action=open-advanced-settings]")?.addEventListener("click", () => {
