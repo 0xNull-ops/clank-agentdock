@@ -99,6 +99,7 @@ let skillQuery = "";
 let modelMenuOpen = false;
 let modelQuery = "";
 let modelOutsideClickListenerAttached = false;
+let showFreebuffManualInput = false;
 
 let activeMode: AgentMode = "ask";
 let activeModel = "openai-compatible";
@@ -1281,6 +1282,7 @@ function renderProvidersTab(): string {
     : profiles;
 
   const sidecarStatus = settingsState?.freebuffSidecarStatus ?? "stopped";
+  const detected = settingsState?.detectedFreebuff;
 
   return `
     <div class="vibeproxy-quick-setup-card">
@@ -1303,29 +1305,56 @@ function renderProvidersTab(): string {
     <div class="freebuff-quick-setup-card">
       <div class="freebuff-quick-header">
         <div class="freebuff-title-row">
-          <span class="freebuff-badge">1-Click Setup</span>
+          <span class="freebuff-badge">Auto-Detect &amp; Connect</span>
           <span class="freebuff-title">Freebuff Quick Connect</span>
         </div>
-        <span class="sidecar-status-pill ${sidecarStatus === "running" ? "running" : sidecarStatus === "error" ? "error" : "stopped"}">
-          ${sidecarStatus === "running" ? "● Sidecar Running (:8080)" : sidecarStatus === "starting" ? "⟳ Starting…" : "○ Ready to Connect"}
+        <span class="sidecar-status-pill ${sidecarStatus === "running" ? "running" : detected ? "detected" : sidecarStatus === "error" ? "error" : "stopped"}">
+          ${sidecarStatus === "running" ? "● Sidecar Running (:8080)" : sidecarStatus === "starting" ? "⟳ Starting…" : detected ? "● Local Credentials Found" : "○ Terminal Auth Required"}
         </span>
       </div>
       <p class="freebuff-quick-desc">
-        Access Freebuff models dynamically via built-in Freebuff2API sidecar with zero terminal setup.
+        Connect to Freebuff using your local terminal authentication (<code>~/.config/manicode/credentials.json</code>) or sidecar.
       </p>
-      <form class="freebuff-setup-form" id="freebuff-setup-form">
-        <div class="freebuff-step-row">
-          <button type="button" class="freebuff-login-btn" data-action="open-freebuff-login">
-            1. Open Freebuff Login (freebuff.llm.pm)
+      ${detected ? `
+        <div class="freebuff-detected-banner">
+          <div class="freebuff-detected-icon">⚡</div>
+          <div class="freebuff-detected-info">
+            <b>Local Freebuff Credentials Detected</b>
+            <span>User: <strong>${escapeHtml(detected.name || detected.email || "Default")}</strong> ${detected.email && detected.name ? `(${escapeHtml(detected.email)})` : ""}</span>
+            <code>${escapeHtml(detected.source)}</code>
+          </div>
+        </div>
+        <div class="freebuff-action-row">
+          <button type="button" class="settings-action-btn primary freebuff-connect-btn" data-action="connect-freebuff-auto">
+            ${sidecarStatus === "running" ? "↻ Sync Freebuff Models" : `⚡ Connect as ${escapeHtml(detected.name || "Detected User")} & Auto-Start`}
+          </button>
+          ${sidecarStatus === "running" ? `<button type="button" class="settings-action-btn secondary freebuff-stop-btn" data-action="toggle-freebuff-sidecar">■ Stop</button>` : ""}
+        </div>
+      ` : `
+        <div class="freebuff-cli-instruction">
+          <p>Authenticate once in your terminal to enable automatic token discovery:</p>
+          <div class="freebuff-cmd-box">
+            <code>npm i -g freebuff && freebuff</code>
+            <button type="button" class="copy-cmd-btn" data-copy="npm i -g freebuff && freebuff" title="Copy command to clipboard">Copy</button>
+          </div>
+        </div>
+        <div class="freebuff-action-row">
+          <button type="button" class="settings-action-btn primary freebuff-connect-btn" data-action="connect-freebuff-auto">
+            ⚡ Auto-Detect &amp; Connect
+          </button>
+          <button type="button" class="settings-action-btn secondary" data-action="toggle-freebuff-manual">
+            ${showFreebuffManualInput ? "Hide Manual Input" : "Manual Paste"}
           </button>
         </div>
-        <div class="freebuff-step-row input-row">
-          <input type="password" id="freebuff-token-input" class="setting-input" placeholder="2. Paste your Freebuff authToken here…" required />
-          <button type="submit" class="settings-action-btn primary freebuff-connect-btn">
-            Connect &amp; Auto-Start
-          </button>
-        </div>
-      </form>
+        ${showFreebuffManualInput ? `
+          <form class="freebuff-setup-form" id="freebuff-setup-form" style="margin-top: 8px;">
+            <div class="freebuff-step-row input-row">
+              <input type="password" id="freebuff-token-input" class="setting-input" placeholder="Paste Freebuff authToken here…" required />
+              <button type="submit" class="settings-action-btn primary freebuff-connect-btn">Connect &amp; Start</button>
+            </div>
+          </form>
+        ` : ""}
+      `}
     </div>
 
     <div class="aihubmix-quick-setup-card">
@@ -2220,6 +2249,30 @@ function wireSettingsInteractions(): void {
     btn.disabled = true;
     btn.textContent = "Connecting…";
     vscode.postMessage({ type: "setupVibeProxy" });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=connect-freebuff-auto]").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    btn.textContent = "Connecting…";
+    vscode.postMessage({ type: "setupFreebuff" });
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-action=toggle-freebuff-manual]").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    showFreebuffManualInput = !showFreebuffManualInput;
+    render();
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    const text = btn.dataset.copy;
+    if (text && typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(text);
+      const prev = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = prev; }, 1500);
+    }
   }));
 
   document.querySelectorAll<HTMLButtonElement>("[data-action=open-freebuff-login]").forEach((btn) => btn.addEventListener("click", (e) => {

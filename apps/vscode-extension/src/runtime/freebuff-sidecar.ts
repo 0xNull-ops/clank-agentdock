@@ -4,6 +4,60 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { FreebuffSidecarStatus } from "../shared/protocol";
 
+export interface DetectedFreebuffCredentials {
+  authToken: string;
+  name?: string;
+  email?: string;
+  source: string;
+}
+
+export function detectFreebuffCredentials(): DetectedFreebuffCredentials | undefined {
+  const home = os.homedir();
+  const candidatePaths = [
+    path.join(home, ".config", "manicode", "credentials.json"),
+    path.join(home, ".config", "freebuff", "credentials.json"),
+    path.join(home, ".manicode", "credentials.json"),
+    path.join(home, ".freebuff", "credentials.json"),
+  ];
+
+  for (const credPath of candidatePaths) {
+    if (fs.existsSync(credPath)) {
+      try {
+        const raw = fs.readFileSync(credPath, "utf8");
+        const json = JSON.parse(raw) as Record<string, unknown>;
+        const entry = (json.default as Record<string, unknown> | undefined) ?? (json as Record<string, unknown>);
+        let token = typeof entry.authToken === "string" ? entry.authToken : undefined;
+        let name = typeof entry.name === "string" ? entry.name : undefined;
+        let email = typeof entry.email === "string" ? entry.email : undefined;
+
+        if (!token) {
+          for (const val of Object.values(json)) {
+            if (val && typeof val === "object" && typeof (val as Record<string, unknown>).authToken === "string") {
+              const v = val as Record<string, unknown>;
+              token = v.authToken as string;
+              name = typeof v.name === "string" ? (v.name as string) : name;
+              email = typeof v.email === "string" ? (v.email as string) : email;
+              break;
+            }
+          }
+        }
+
+        if (token && token.trim()) {
+          return {
+            authToken: token.trim(),
+            name,
+            email,
+            source: credPath,
+          };
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+  return undefined;
+}
+
 export interface FreebuffSidecarConfig {
   port?: number;
   listenAddr?: string;

@@ -65,7 +65,7 @@ export type UiToExtensionMessage =
   | { type: "saveMaxSteps"; steps: number }
   | { type: "saveProviderProfile"; profile: SaveProviderProfileInput }
   | { type: "saveCustomMode"; mode: SaveCustomModeInput }
-  | { type: "setupFreebuff"; authToken: string }
+  | { type: "setupFreebuff"; authToken?: string }
   | { type: "setupVibeProxy" }
   | { type: "setupAiHubMix"; apiKey: string }
   | { type: "openExternalUrl"; url: string }
@@ -194,6 +194,12 @@ export interface HarnessSettingsState {
   workspaceName?: string;
   freebuffSidecarStatus?: FreebuffSidecarStatus;
   freebuffSidecarError?: string;
+  detectedFreebuff?: {
+    authToken: string;
+    name?: string;
+    email?: string;
+    source: string;
+  };
 }
 
 /** UI-safe metadata for a recent workspace session. */

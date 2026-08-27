@@ -341,15 +341,31 @@ h1 { margin: 1px 0 0; font-size: 13px; line-height: 1.2; font-weight: 600; lette
 
 /* Freebuff Quick Connect Card (Minimalist Charcoal) */
 .freebuff-quick-setup-card { margin-bottom: 10px; padding: 12px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-md); background: var(--forge-surface); animation: rise .15s ease both; }
-.freebuff-quick-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.freebuff-quick-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .freebuff-title-row { display: flex; align-items: center; gap: 6px; }
 .freebuff-badge { font-size: 9.5px; font-weight: 600; font-family: var(--forge-code); text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: var(--forge-text-secondary); background: var(--forge-input); border: 1px solid var(--forge-border); }
 .freebuff-title { font-size: 12px; font-weight: 600; color: var(--forge-text); }
 .sidecar-status-pill { font-size: 9.5px; font-family: var(--forge-code); font-weight: 500; padding: 1px 7px; border-radius: 999px; }
 .sidecar-status-pill.running { color: #4ade80; background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.2); }
 .sidecar-status-pill.stopped { color: var(--forge-muted); background: var(--forge-input); border: 1px solid var(--forge-border); }
+.sidecar-status-pill.detected { color: #60a5fa; background: rgba(96, 165, 250, 0.1); border: 1px solid rgba(96, 165, 250, 0.25); }
 .sidecar-status-pill.error { color: #f87171; background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.2); }
 .freebuff-quick-desc { margin: 0 0 8px; font-size: 10.5px; color: var(--forge-text-secondary); line-height: 1.4; }
+.freebuff-detected-banner { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; padding: 8px 10px; border: 1px solid rgba(96, 165, 250, 0.25); border-radius: var(--forge-radius-sm); background: rgba(96, 165, 250, 0.06); }
+.freebuff-detected-icon { font-size: 14px; line-height: 1.2; }
+.freebuff-detected-info { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; }
+.freebuff-detected-info b { color: var(--forge-text); font-weight: 600; }
+.freebuff-detected-info span { color: var(--forge-text-secondary); }
+.freebuff-detected-info code { font-size: 9.5px; color: var(--forge-muted); font-family: var(--forge-code); }
+.freebuff-cli-instruction { margin-bottom: 8px; }
+.freebuff-cli-instruction p { margin: 0 0 4px; font-size: 10.5px; color: var(--forge-text-secondary); }
+.freebuff-cmd-box { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); background: var(--forge-input); }
+.freebuff-cmd-box code { font: 10px var(--forge-code); color: var(--forge-text); user-select: all; }
+.copy-cmd-btn { padding: 2px 7px; border: 1px solid var(--forge-border); border-radius: 4px; background: var(--forge-surface); color: var(--forge-text-secondary); font-size: 10px; cursor: pointer; transition: all .15s ease; }
+.copy-cmd-btn:hover { background: var(--forge-hover); color: var(--forge-text); border-color: var(--forge-border-strong); }
+.freebuff-action-row { display: flex; gap: 6px; align-items: center; }
+.freebuff-action-row .settings-action-btn { flex: 1; height: 28px; white-space: nowrap; font-size: 11px; padding: 0 10px; }
+.freebuff-stop-btn { max-width: 110px; }
 .freebuff-setup-form { display: grid; gap: 6px; }
 .freebuff-step-row { display: flex; align-items: center; gap: 6px; }
 .freebuff-step-row.input-row { display: flex; gap: 6px; }

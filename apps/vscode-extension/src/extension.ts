@@ -37,7 +37,7 @@ import { CHECKPOINT_DOCUMENT_SCHEME } from "./checkpoint";
 import { CustomModeStore } from "./runtime/custom-modes";
 import { SkillStore } from "./runtime/skills";
 import { providerPreset, providerPresets } from "./runtime/provider-presets";
-import { FreebuffSidecarManager } from "./runtime/freebuff-sidecar";
+import { FreebuffSidecarManager, detectFreebuffCredentials } from "./runtime/freebuff-sidecar";
 import { chatMessagesFromNormalized, sessionHistoryItemFromSession, subagentActivityFromRecord, toolActivitiesFromSnapshot } from "./shared/session-history";
 
 const VIEW_ID = "agentdock.agentView";
@@ -591,13 +591,14 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       case "setupFreebuff": {
-        const token = message.authToken.trim();
+        const detected = detectFreebuffCredentials();
+        const token = (message.authToken && message.authToken.trim()) || detected?.authToken || (await this.providerProfiles.getApiKey("freebuff")) || "";
         if (!token) {
-          void vscode.window.showErrorMessage("Please enter a valid Freebuff authToken.");
+          void vscode.window.showErrorMessage("No Freebuff credentials found. Run 'npm i -g freebuff && freebuff' in terminal or enter an authToken.");
           return;
         }
         void vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: "Starting Freebuff sidecar & pulling models…" },
+          { location: vscode.ProgressLocation.Notification, title: `Starting Freebuff sidecar${detected?.name ? ` for ${detected.name}` : ""} & pulling models…` },
           async () => {
             const startResult = await this.freebuffSidecar.start(token);
             if (!startResult.ok) {
@@ -642,7 +643,9 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
                 if (!hasValidDefault && fetched[0]) {
                   await this.providerProfiles.updateProfile(profileId, { defaultModel: fetched[0].id });
                 }
-                void vscode.window.showInformationMessage(`Freebuff connected! Discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"} (${fetched[0]?.id}).`);
+                void vscode.window.showInformationMessage(`Freebuff connected${detected?.name ? ` for ${detected.name}` : ""}! Discovered ${fetched.length} model${fetched.length === 1 ? "" : "s"} (${fetched[0]?.id}).`);
+              } else {
+                void vscode.window.showInformationMessage(`Freebuff connected${detected?.name ? ` for ${detected.name}` : ""}!`);
               }
             } catch (err) {
               void vscode.window.showWarningMessage(`Freebuff started, but model discovery encountered an error: ${err instanceof Error ? err.message : String(err)}`);
@@ -1550,6 +1553,7 @@ class AgentViewProvider implements vscode.WebviewViewProvider {
       workspaceName: vscode.workspace.name,
       freebuffSidecarStatus: sidecarStatus.status,
       freebuffSidecarError: sidecarStatus.error,
+      detectedFreebuff: detectFreebuffCredentials(),
     };
   }
 
@@ -1708,7 +1712,7 @@ function isUiToExtensionMessage(value: unknown): value is UiToExtensionMessage {
     case "openExternalUrl":
       return typeof message.url === "string" && message.url.length > 0 && message.url.length <= 2048;
     case "setupFreebuff":
-      return typeof message.authToken === "string" && message.authToken.length > 0 && message.authToken.length <= 4096;
+      return message.authToken === undefined || (typeof message.authToken === "string" && message.authToken.length <= 4096);
     case "setupAiHubMix":
       return typeof message.apiKey === "string" && message.apiKey.length > 0 && message.apiKey.length <= 4096;
     case "activateProvider":
